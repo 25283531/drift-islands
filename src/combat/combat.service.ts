@@ -8,6 +8,7 @@ import { Monster } from '../database/entities/island.entities';
 import { Item } from '../database/entities/item.entities';
 import { CombatSession } from '../database/entities/combat.entity';
 import { CharactersService } from '../characters/characters.service';import { NarratorService } from '../ai/narrator.service';
+import { CrystalsService } from '../crystals/crystals.service';
 import { WorldService } from '../world/world.service';
 import { FLEE, GAME } from '../game/constants';
 import { envInt } from '../common/env';
@@ -70,6 +71,7 @@ export class CombatService implements OnModuleDestroy {
     private readonly characters: CharactersService,
     private readonly narrator: NarratorService,
     private readonly world: WorldService,
+    private readonly crystals: CrystalsService,
     private readonly events: EventEmitter2,
   ) {}
 
@@ -413,12 +415,14 @@ export class CombatService implements OnModuleDestroy {
     const player = runtime.participants.find((p) => p.side === 'player');
     const monsters = runtime.participants.filter((p) => p.side === 'monster');
 
+    const deadRows: Monster[] = [];
     for (const monster of monsters) {
       const row = await this.monsters.findOne({ where: { id: monster.refId } });
       if (!row) continue;
       row.hp = monster.hp;
       row.state = monster.alive ? 'idle' : 'dead';
       await this.monsters.save(row);
+      if (!monster.alive) deadRows.push(row);
     }
 
     if (outcome === 'defeat') {
@@ -446,6 +450,15 @@ export class CombatService implements OnModuleDestroy {
     character.status = 'online';
     await this.characters.save(character);
 
+    // M2：击杀掉落晶核（等级 = 怪物等级，§4.2）
+    const dropped: { level: number; energy: number }[] = [];
+    if (outcome === 'victory') {
+      for (const row of deadRows) {
+        const crystal = await this.crystals.dropForMonster(row, character.id);
+        dropped.push({ level: crystal.level, energy: crystal.energy_total });
+      }
+    }
+
     const narrationKind = outcome === 'victory' ? 'combat_victory' : 'combat_defeat';
     const narration = await this.narrator.render(
       narrationKind,
@@ -463,6 +476,7 @@ export class CombatService implements OnModuleDestroy {
       outcome,
       narration: narration.text,
       character_id: character.id,
+      crystals: dropped,
     });
     this.events.emit('character.update', { character_id: character.id });
 

@@ -18,6 +18,11 @@ import { CombatService } from '../combat/combat.service';
 import { ChatService } from '../chat/chat.service';
 import { NarratorService } from '../ai/narrator.service';
 import { WorldService } from '../world/world.service';
+import { IslandCreateService } from '../islands/island-create.service';
+import { CollectService } from '../collect/collect.service';
+import { CrystalsService } from '../crystals/crystals.service';
+import { GarrisonService } from '../garrison/garrison.service';
+import { ShipsService } from '../ships/ships.service';
 import { FIXED_IDS } from '../database/seed.service';
 import { GAME } from '../game/constants';
 import { envInt } from '../common/env';
@@ -43,6 +48,11 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly chat: ChatService,
     private readonly narrator: NarratorService,
     private readonly world: WorldService,
+    private readonly islandCreate: IslandCreateService,
+    private readonly collectService: CollectService,
+    private readonly crystals: CrystalsService,
+    private readonly garrison: GarrisonService,
+    private readonly ships: ShipsService,
   ) {}
 
   handleConnection(client: Socket): void {
@@ -359,6 +369,212 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         message: ai,
         visibility: 'visible',
       });
+    }
+  }
+
+  // ---------------------------------------------------------------- M2 造岛 / 收集 / 晶核 / 驻扎
+
+  @SubscribeMessage('island_create_start')
+  async onIslandCreateStart(@ConnectedSocket() client: Socket) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    try {
+      const started = this.islandCreate.start(identity.characterId);
+      client.emit('island_create_question', {
+        question_id: started.question.id,
+        text: started.question.text,
+        options: started.question.options ?? null,
+        index: started.index,
+        total: started.total,
+      });
+    } catch (err) {
+      this.emitError(client, 'ISLAND_CREATE_FAILED', (err as Error).message);
+    }
+  }
+
+  @SubscribeMessage('island_create_answer')
+  async onIslandCreateAnswer(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() body: { question_id?: string; answer?: string | null },
+  ) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    try {
+      const result = this.islandCreate.answer(identity.characterId, body?.question_id ?? '', body?.answer ?? null);
+      if (result.next) {
+        client.emit('island_create_question', {
+          question_id: result.next.id,
+          text: result.next.text,
+          options: result.next.options ?? null,
+        });
+      } else {
+        const summary = await this.islandCreate.summary(identity.characterId);
+        client.emit('island_create_summary', summary);
+      }
+    } catch (err) {
+      this.emitError(client, 'ISLAND_CREATE_FAILED', (err as Error).message);
+    }
+  }
+
+  @SubscribeMessage('island_create_confirm')
+  async onIslandCreateConfirm(@ConnectedSocket() client: Socket) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    const character = await this.characters.get(identity.characterId);
+    if (!character) return this.emitError(client, 'NO_CHARACTER', '角色不存在');
+    try {
+      const result = await this.islandCreate.confirm(character);
+      client.emit('island_created', { island_id: result.island.id, name: result.island.name, summary: result.summary });
+      for (const warning of result.warnings) client.emit('warning', { type: 'island_create', text: warning });
+    } catch (err) {
+      this.emitError(client, 'ISLAND_CREATE_FAILED', (err as Error).message);
+    }
+  }
+
+  @SubscribeMessage('island_create_cancel')
+  onIslandCreateCancel(@ConnectedSocket() client: Socket) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    this.islandCreate.cancel(identity.characterId);
+    client.emit('narration', { channel_id: FIXED_IDS.SEA_CHANNEL, text: '你把画到一半的岛图揉成一团，丢进海里。', kind: 'island_create' });
+  }
+
+  @SubscribeMessage('collect')
+  async onCollect(@ConnectedSocket() client: Socket, @MessageBody() body: { intent?: string; island_id?: string }) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    const character = await this.characters.get(identity.characterId);
+    if (!character) return this.emitError(client, 'NO_CHARACTER', '角色不存在');
+    if (this.combat.activeFor(character.id)) return this.emitError(client, 'COMBAT_LOCK', '战斗中不能搜刮');
+    const islandId = body?.island_id || character.island_id;
+    if (!islandId) return this.emitError(client, 'NOT_ON_ISLAND', '你不在岛上');
+    try {
+      const result = await this.collectService.collect(character, islandId, body?.intent ?? '');
+      client.emit('arbitration_result', {
+        kind: 'collect',
+        outcome: result.outcome,
+        category: result.category,
+        amount: result.amount,
+        chance: result.chance,
+        roll: result.roll,
+        narration: result.narration,
+        items: result.items ?? [],
+      });
+      this.emitCharacterUpdate(character.id);
+    } catch (err) {
+      this.emitError(client, 'COLLECT_FAILED', (err as Error).message);
+    }
+  }
+
+  @SubscribeMessage('crystal_absorb')
+  async onCrystalAbsorb(@ConnectedSocket() client: Socket, @MessageBody() body: { crystal_id?: string }) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    const character = await this.characters.get(identity.characterId);
+    if (!character) return this.emitError(client, 'NO_CHARACTER', '角色不存在');
+    try {
+      const result = await this.crystals.absorb(character, body?.crystal_id ?? '');
+      client.emit('crystal_absorbed', result);
+      client.emit('narration', { channel_id: FIXED_IDS.SEA_CHANNEL, text: result.narration, kind: 'crystal' });
+      this.emitCharacterUpdate(character.id);
+      client.emit('crystals', { items: await this.crystals.list(character.id) });
+    } catch (err) {
+      this.emitError(client, 'CRYSTAL_ABSORB_FAILED', (err as Error).message);
+    }
+  }
+
+  @SubscribeMessage('crystals')
+  async onCrystals(@ConnectedSocket() client: Socket) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    client.emit('crystals', { items: await this.crystals.list(identity.characterId) });
+  }
+
+  @SubscribeMessage('settle')
+  async onSettle(@ConnectedSocket() client: Socket, @MessageBody() body: { island_id?: string }) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    const character = await this.characters.get(identity.characterId);
+    if (!character) return this.emitError(client, 'NO_CHARACTER', '角色不存在');
+    try {
+      const result = await this.garrison.settle(character, body?.island_id || character.island_id || '');
+      client.emit('base_update', result);
+      client.emit('narration', { channel_id: character.island_id ?? FIXED_IDS.SEA_CHANNEL, text: result.narration, kind: 'settle' });
+    } catch (err) {
+      this.emitError(client, 'SETTLE_FAILED', (err as Error).message);
+    }
+  }
+
+  @SubscribeMessage('base_build')
+  async onBaseBuild(@ConnectedSocket() client: Socket, @MessageBody() body: { island_id?: string; facility?: string }) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    const character = await this.characters.get(identity.characterId);
+    if (!character) return this.emitError(client, 'NO_CHARACTER', '角色不存在');
+    try {
+      const result = await this.garrison.build(character, body?.island_id || character.island_id || '', body?.facility ?? '');
+      client.emit('base_update', result);
+      client.emit('narration', { channel_id: character.island_id ?? FIXED_IDS.SEA_CHANNEL, text: result.narration, kind: 'base' });
+    } catch (err) {
+      this.emitError(client, 'BASE_BUILD_FAILED', (err as Error).message);
+    }
+  }
+
+  @SubscribeMessage('base_store')
+  async onBaseStore(@ConnectedSocket() client: Socket, @MessageBody() body: { island_id?: string; type?: string; quantity?: number }) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    const character = await this.characters.get(identity.characterId);
+    if (!character) return this.emitError(client, 'NO_CHARACTER', '角色不存在');
+    try {
+      const result = await this.garrison.store(character, body?.island_id || character.island_id || '', body?.type ?? '', Number(body?.quantity ?? 1));
+      client.emit('base_update', { ...result, storage: await this.garrison.storage(body?.island_id || character.island_id || '') });
+    } catch (err) {
+      this.emitError(client, 'BASE_STORE_FAILED', (err as Error).message);
+    }
+  }
+
+  @SubscribeMessage('base_take')
+  async onBaseTake(@ConnectedSocket() client: Socket, @MessageBody() body: { island_id?: string; type?: string; quantity?: number }) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    const character = await this.characters.get(identity.characterId);
+    if (!character) return this.emitError(client, 'NO_CHARACTER', '角色不存在');
+    try {
+      const result = await this.garrison.take(character, body?.island_id || character.island_id || '', body?.type ?? '', Number(body?.quantity ?? 1));
+      client.emit('base_update', { ...result, storage: await this.garrison.storage(body?.island_id || character.island_id || '') });
+    } catch (err) {
+      this.emitError(client, 'BASE_TAKE_FAILED', (err as Error).message);
+    }
+  }
+
+  @SubscribeMessage('ship_upgrade')
+  async onShipUpgrade(@ConnectedSocket() client: Socket, @MessageBody() body: { track?: string }) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    const character = await this.characters.get(identity.characterId);
+    if (!character) return this.emitError(client, 'NO_CHARACTER', '角色不存在');
+    try {
+      const result = await this.ships.upgrade(character, body?.track ?? '');
+      client.emit('ship_update', { ship: result.ship });
+      client.emit('narration', { channel_id: character.island_id ?? FIXED_IDS.SEA_CHANNEL, text: result.narration, kind: 'ship_upgrade' });
+      client.emit('character_update', { character: await this.characters.get(character.id) });
+    } catch (err) {
+      this.emitError(client, 'SHIP_UPGRADE_FAILED', (err as Error).message);
+    }
+  }
+
+  @SubscribeMessage('island_panel')
+  async onIslandPanel(@ConnectedSocket() client: Socket, @MessageBody() body: { island_id?: string }) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    const character = await this.characters.get(identity.characterId);
+    if (!character) return this.emitError(client, 'NO_CHARACTER', '角色不存在');
+    try {
+      const panel = await this.garrison.panel(character, body?.island_id || character.island_id || '');
+      client.emit('island_panel', panel);
+    } catch (err) {
+      this.emitError(client, 'ISLAND_PANEL_FAILED', (err as Error).message);
     }
   }
 

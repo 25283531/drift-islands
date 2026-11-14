@@ -252,6 +252,172 @@
     });
 
     socket.on('channel_changed', () => {});
+
+    // ---------------- M2：造岛 / 收集 / 晶核 / 基地
+    socket.on('island_create_question', (q) => renderCreateQuestion(q));
+    socket.on('island_create_summary', (s) => renderCreateSummary(s));
+    socket.on('island_created', (data) => {
+      $('m2-content').classList.add('hidden');
+      toast(`岛屿「${data.name}」已落成，坐标未知`, 'warn');
+      logLine({ who: '叙述', text: data.summary, cls: 'narration' });
+    });
+    socket.on('arbitration_result', (r) => {
+      const label = r.outcome === 'success' ? '得手' : r.outcome === 'failure' ? '失手' : '空手';
+      logLine({
+        who: '判定',
+        text: `${label}：${r.narration}（成功率 ${Math.round((r.chance || 0) * 100)}%，掷值 ${r.roll ?? 0}）`,
+        cls: 'narration',
+      });
+    });
+    socket.on('crystal_absorbed', (r) => {
+      logLine({ who: '晶核', text: r.narration, cls: 'system' });
+      toast(`吸收 ${r.gained} 单位能量`, 'warn');
+    });
+    socket.on('crystals', (data) => renderCrystals(data.items || []));
+    socket.on('base_update', (data) => {
+      if (data.base) toast(`基地：防御 ${data.base.defense_lv} · 储物 ${data.base.storage_lv} · 设施 ${data.base.facility_lv}`, 'warn');
+    });
+    socket.on('island_panel', (data) => renderPanel(data));
+  }
+
+  // ------------------------------------------------------------ M2 UI
+
+  function m2Show() {
+    $('m2-content').classList.remove('hidden');
+    return $('m2-content');
+  }
+
+  let currentQuestion = null;
+
+  function renderCreateQuestion(q) {
+    currentQuestion = q;
+    const box = m2Show();
+    box.innerHTML = '';
+    const title = document.createElement('p');
+    title.className = 'muted';
+    title.textContent = `造岛问答 ${q.index + 1}/${q.total}`;
+    const text = document.createElement('p');
+    text.textContent = q.text;
+    const input = document.createElement('input');
+    input.id = 'm2-answer';
+    input.maxLength = 200;
+    input.placeholder = '输入回答，可跳过的题留空';
+    const row = document.createElement('div');
+    row.className = 'btn-row';
+    const send = document.createElement('button');
+    send.className = 'primary';
+    send.textContent = '下一题';
+    send.onclick = () => {
+      state.socket.emit('island_create_answer', { question_id: q.question_id, answer: input.value.trim() });
+      input.value = '';
+    };
+    const skip = document.createElement('button');
+    skip.textContent = '跳过';
+    skip.onclick = () => state.socket.emit('island_create_answer', { question_id: q.question_id, answer: '' });
+    row.append(send, skip);
+    box.append(title, text, input, row);
+    input.focus();
+  }
+
+  function renderCreateSummary(s) {
+    const box = m2Show();
+    box.innerHTML = '';
+    const draft = s.draft || {};
+    const lines = [
+      `岛名：${draft.name || '—'}`,
+      `描述：${draft.description || '—'}`,
+      `规则：${(draft.rules || []).join('；') || '—'}`,
+      `资源：${draft.resource_direction || '—'}`,
+      `怪物：${(draft.monsters || []).map((m) => `${m.name || '怪物'} Lv.${m.max_level} × ${m.count}`).join('、') || '—'}`,
+    ];
+    lines.forEach((line) => {
+      const p = document.createElement('p');
+      p.textContent = line;
+      box.appendChild(p);
+    });
+    if ((s.issues || []).length > 0) {
+      const issue = document.createElement('p');
+      issue.className = 'error';
+      issue.textContent = s.issues.map((i) => i.message).join('；');
+      box.appendChild(issue);
+    }
+    const row = document.createElement('div');
+    row.className = 'btn-row';
+    const confirm = document.createElement('button');
+    confirm.className = 'primary';
+    confirm.textContent = '确认创建';
+    confirm.onclick = () => state.socket.emit('island_create_confirm');
+    const cancel = document.createElement('button');
+    cancel.textContent = '取消';
+    cancel.onclick = () => {
+      state.socket.emit('island_create_cancel');
+      box.classList.add('hidden');
+    };
+    row.append(confirm, cancel);
+    box.appendChild(row);
+  }
+
+  function renderCrystals(items) {
+    const box = m2Show();
+    box.innerHTML = '';
+    if (items.length === 0) {
+      const p = document.createElement('p');
+      p.textContent = '你身上没有晶核。击败怪物才会掉落。';
+      box.appendChild(p);
+      return;
+    }
+    items.forEach((crystal) => {
+      const row = document.createElement('div');
+      row.className = 'btn-row';
+      const label = document.createElement('span');
+      label.textContent = `${crystal.level} 级晶核 · ${crystal.energy_remaining}/${crystal.energy_total}`;
+      const absorb = document.createElement('button');
+      absorb.textContent = '吸收';
+      absorb.onclick = () => state.socket.emit('crystal_absorb', { crystal_id: crystal.id });
+      row.append(label, absorb);
+      box.appendChild(row);
+    });
+  }
+
+  function renderPanel(data) {
+    const box = m2Show();
+    box.innerHTML = '';
+    const rows = [
+      `岛名：${data.name}`,
+      `访问次数：${data.visit_count}`,
+      `被拿走资源：${data.resources_taken}`,
+      `防御：${data.defense_power} · 火力：${data.firepower}`,
+      `怪物：${data.monster_count} 只（最高 ${data.max_monster_level} 级）`,
+      `基地：${data.base ? `防御 ${data.base.defense_lv} · 储物 ${data.base.storage_lv} · 设施 ${data.base.facility_lv}` : '未建'}`,
+      `坐标：不可见（防自肥）`,
+    ];
+    rows.forEach((line) => {
+      const p = document.createElement('p');
+      p.textContent = line;
+      box.appendChild(p);
+    });
+  }
+
+  function renderUpgrade() {
+    const box = m2Show();
+    box.innerHTML = '';
+    const tracks = [
+      ['defense', '防御线'],
+      ['weapon', '武器线'],
+      ['living', '生活线'],
+      ['research', '科研线'],
+    ];
+    tracks.forEach(([track, label]) => {
+      const row = document.createElement('div');
+      row.className = 'btn-row';
+      const name = document.createElement('span');
+      name.textContent = label;
+      const btn = document.createElement('button');
+      btn.textContent = '升级';
+      btn.onclick = () => state.socket.emit('ship_upgrade', { track });
+      row.append(name, btn);
+      box.appendChild(row);
+    });
   }
 
   function renderTab() {
@@ -405,6 +571,27 @@
   $('btn-attack').onclick = () => combatAction('attack');
   $('btn-defend').onclick = () => combatAction('defend');
   $('btn-flee').onclick = () => combatAction('flee');
+
+  // M2 按钮
+  $('btn-island-create').onclick = () => state.socket && state.socket.emit('island_create_start');
+  $('btn-collect').onclick = () => {
+    if (!state.socket) return;
+    const intent = prompt('你想搜刮什么？（例如：燃料、药品、零件）', '燃料');
+    if (intent === null) return;
+    state.socket.emit('collect', { intent });
+  };
+  $('btn-crystals').onclick = () => state.socket && state.socket.emit('crystals');
+  $('btn-upgrade').onclick = renderUpgrade;
+  $('btn-settle').onclick = () => {
+    const islandId = state.island?.id || state.character?.island_id;
+    if (!islandId) return toast('先上岛再驻扎', 'warn');
+    state.socket.emit('settle', { island_id: islandId });
+  };
+  $('btn-panel').onclick = () => {
+    const islandId = state.island?.id || state.character?.island_id;
+    if (!islandId) return toast('先上岛再看面板', 'warn');
+    state.socket.emit('island_panel', { island_id: islandId });
+  };
 
   // 有 token 时自动续登
   if (state.token) {

@@ -3,6 +3,7 @@ import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { Channel } from './entities/chat.entities';
 import { Island, Monster, MonsterKind } from './entities/island.entities';
+import { Item } from './entities/item.entities';
 import { ModelPool, ResourceRegistry, WorldState } from './entities/world.entities';
 import { GAME } from '../game/constants';
 import { envStr } from '../common/env';
@@ -36,6 +37,7 @@ export class SeedService implements OnApplicationBootstrap {
     @InjectRepository(Monster) private readonly monsters: Repository<Monster>,
     @InjectRepository(ResourceRegistry) private readonly resources: Repository<ResourceRegistry>,
     @InjectRepository(ModelPool) private readonly modelPool: Repository<ModelPool>,
+    @InjectRepository(Item) private readonly items: Repository<Item>,
   ) {}
 
   async onApplicationBootstrap(): Promise<void> {
@@ -48,6 +50,7 @@ export class SeedService implements OnApplicationBootstrap {
     await this.ensureMonsterKinds();
     await this.ensurePresetIsland();
     await this.ensurePresetMonsters();
+    await this.ensurePresetItems();
     await this.ensureResources();
     await this.ensureModelPool();
     const islandCount = await this.islands.count();
@@ -228,6 +231,30 @@ export class SeedService implements OnApplicationBootstrap {
           faction_id: null,
           skills: [],
           created_world_day: 1,
+        }),
+      );
+    }
+  }
+
+  /** 预置岛的初始资源（M2 收集用）：岛上库存按物品行保存，owner_type = island */
+  private async ensurePresetItems(): Promise<void> {
+    const existing = await this.items.count({ where: { owner_type: 'island', owner_id: FIXED_IDS.PRESET_ISLAND } });
+    if (existing > 0) return;
+    const rows = [
+      { id: '00000000-0000-4000-8000-000000000601', name: '燃料', type: 'fuel', quantity: 8 },
+      { id: '00000000-0000-4000-8000-000000000602', name: '零件', type: 'part', quantity: 10 },
+      { id: '00000000-0000-4000-8000-000000000603', name: '药品', type: 'medicine', quantity: 3 },
+    ];
+    for (const row of rows) {
+      await this.items.save(
+        this.items.create({
+          ...row,
+          tags: ['preset'],
+          condition: null,
+          owner_type: 'island',
+          owner_id: FIXED_IDS.PRESET_ISLAND,
+          x: 12,
+          y: 8,
         }),
       );
     }

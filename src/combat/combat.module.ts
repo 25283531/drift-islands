@@ -6,10 +6,11 @@ import { Item } from '../database/entities/item.entities';
 import { CharactersModule } from '../characters/characters.module';
 import { WorldModule } from '../world/world.module';
 import { AiModule } from '../ai/ai.module';
+import { M2Module } from '../m2/m2.module';
 import { CombatService } from './combat.service';
 
 @Module({
-  imports: [TypeOrmModule.forFeature([CombatSession, Monster, Item]), CharactersModule, WorldModule, AiModule],
+  imports: [TypeOrmModule.forFeature([CombatSession, Monster, Item]), CharactersModule, WorldModule, AiModule, M2Module],
   providers: [CombatService],
   exports: [CombatService],
 })

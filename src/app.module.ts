@@ -13,6 +13,7 @@ import { MovementModule } from './movement/movement.module';
 import { CombatModule } from './combat/combat.module';
 import { ChatModule } from './chat/chat.module';
 import { GameModule } from './game/game.module';
+import { M2Module } from './m2/m2.module';
 
 @Module({
   imports: [
@@ -29,6 +30,7 @@ import { GameModule } from './game/game.module';
     CombatModule,
     ChatModule,
     GameModule,
+    M2Module,
   ],
   controllers: [AppController],
 })
