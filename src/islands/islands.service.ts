@@ -8,6 +8,7 @@ import { Island, Monster, MonsterKind } from '../database/entities/island.entiti
 import { ENCOUNTER_RANGE, PROTECTION } from '../game/constants';
 import { bearingDeg, bearingText, distanceNm, round1 } from '../game/geo';
 import { encounterAllowed } from '../game/m3';
+import { concurrentMonsterLimit } from '../game/m2';
 
 export interface EnterResult {
   island: Island;
@@ -153,6 +154,16 @@ export class IslandsService {
       });
     }
 
+    // 一次只能应付有限数量的怪物（按人物等级），避免新手被围殴
+    const limit = concurrentMonsterLimit(character.level);
+    const engaged = monsters.slice(0, limit);
+    if (monsters.length > engaged.length) {
+      warnings.push({
+        type: 'monster_limit',
+        text: `以你现在的身手，一次只能应付 ${limit} 只；其余 ${monsters.length - engaged.length} 只还在暗处观望。`,
+      });
+    }
+
     const firstVisit = character.island_id !== islandId;
     if (firstVisit) {
       island.visit_count += 1;
@@ -161,7 +172,7 @@ export class IslandsService {
     }
 
     character.island_id = island.id;
-    return { island, channel, monsters, warnings };
+    return { island, channel, monsters: engaged, warnings };
   }
 
   async publicView(island: Island, viewer: Character) {

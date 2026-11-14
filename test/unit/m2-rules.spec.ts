@@ -4,6 +4,7 @@ import {
   applyEnergy,
   collectAmount,
   collectChance,
+  concurrentMonsterLimit,
   crystalEnergy,
   energyForNextLevel,
   islandQuota,
@@ -153,5 +154,19 @@ describe('M2 收集裁决', () => {
     expect(collectAmount({ researchLv: 0, islandMaxLevel: 1, roll: 0 })).toBe(1);
     expect(collectAmount({ researchLv: 2, islandMaxLevel: 1, roll: 0.99 })).toBeGreaterThanOrEqual(1);
     expect(collectAmount({ researchLv: 0, islandMaxLevel: 5, roll: 0.99 })).toBe(2);
+  });
+});
+
+describe('M2 同时参战怪物上限', () => {
+  it('0 级 1 只，每升 1 级 +1，最多 4 只', () => {
+    expect(concurrentMonsterLimit(0)).toBe(1);
+    expect(concurrentMonsterLimit(1)).toBe(2);
+    expect(concurrentMonsterLimit(2)).toBe(3);
+    expect(concurrentMonsterLimit(3)).toBe(4);
+    expect(concurrentMonsterLimit(7)).toBe(4);
+  });
+
+  it('非法等级按 0 级处理', () => {
+    expect(concurrentMonsterLimit(-3)).toBe(1);
   });
 });

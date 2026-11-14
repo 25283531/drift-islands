@@ -203,3 +203,19 @@ export function collectAmount(params: { researchLv: number; islandMaxLevel: numb
   const penalty = params.islandMaxLevel >= 4 ? 1 : 0;
   return Math.max(1, base - penalty);
 }
+
+// ---------------------------------------------------------------- 战斗参战上限
+
+/**
+ * 同时参战的怪物数量上限：0 级 1 只，每升 1 级 +1，最多 4 只。
+ * 岛上的怪可以比这更多，但一次只惊动这么多，避免新手被围殴。
+ */
+export const CONCURRENT_MONSTERS = { base: 1, perLevel: 1, max: 4 } as const;
+
+export function concurrentMonsterLimit(level: number): number {
+  const lv = Math.max(0, Math.floor(level));
+  return Math.max(
+    CONCURRENT_MONSTERS.base,
+    Math.min(CONCURRENT_MONSTERS.max, CONCURRENT_MONSTERS.base + lv * CONCURRENT_MONSTERS.perLevel),
+  );
+}

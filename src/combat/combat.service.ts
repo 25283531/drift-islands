@@ -153,7 +153,7 @@ export class CombatService implements OnModuleDestroy {
     channelId: string;
     monsters: Monster[];
   }): Promise<Runtime | null> {
-    const { character, ship, islandId, channelId } = params;
+    const { character, ship, islandId, channelId, monsters } = params;
     const existing = this.activeFor(character.id);
     if (existing) return existing;
 
@@ -161,9 +161,10 @@ export class CombatService implements OnModuleDestroy {
     await this.recover(islandId);
 
     const inUse = this.monstersInUse();
+    const wanted = new Set(monsters.map((monster) => monster.id));
     const fresh = (
       await this.monsters.find({ where: { island_id: islandId, state: Not('dead') } })
-    ).filter((monster) => !inUse.has(monster.id) && monster.hp > 0);
+    ).filter((monster) => wanted.has(monster.id) && !inUse.has(monster.id) && monster.hp > 0);
     if (fresh.length === 0) return null;
 
     const participants: Combatant[] = [
