@@ -235,14 +235,18 @@
       $('combat-box').classList.remove('hidden');
       $('combat-round').textContent = data.round;
       state.combatDeadline = Date.now() + data.deadline_ms;
-      renderParticipants(data.participants);
+      renderCombat(data);
       startCombatTimer();
       setCombatButtons(true);
-      logLine({ who: '战斗', text: `第 ${data.round} 回合开始，15 秒内提交行动。直接发「攻击」「防御」或「逃跑」也行。`, cls: 'combat' });
+      logLine({
+        who: '战斗',
+        text: `第 ${data.round} 回合开始。${data.status_text ?? ''}不操作会自动攻击，也可以发「打第2只」换目标。`,
+        cls: 'combat',
+      });
     });
 
     socket.on('combat_round_result', (data) => {
-      renderParticipants(data.results.map((r) => ({ ...r, max_hp: r.max_hp, level: '' })));
+      renderCombat({ ...data, participants: data.results });
       logLine({ who: '战斗', text: `第 ${data.round} 回合：${data.narration}`, cls: 'combat' });
       setCombatButtons(true);
     });
@@ -508,19 +512,42 @@
 
   // ------------------------------------------------------------ 战斗 UI
 
-  function renderParticipants(list) {
+  function renderCombat(data) {
+    const you = data.you;
+    const youEl = $('combat-you');
+    if (youEl) {
+      youEl.textContent = you
+        ? `你 ${you.hp}/${you.max_hp} · 攻击 ${you.attack} · 防御 ${you.defense}`
+        : '—';
+    }
+
     const ul = $('combat-participants');
     ul.innerHTML = '';
-    (list || []).forEach((p) => {
+    const queue = data.queue ?? (data.participants ?? data.results ?? [])
+      .filter((p) => p.side === 'monster')
+      .map((p, index) => ({ ...p, index: index + 1, alive: p.hp > 0 }));
+
+    queue.forEach((monster) => {
       const li = document.createElement('li');
-      li.className = `${p.side === 'player' ? 'player' : ''} ${p.hp <= 0 ? 'dead' : ''}`;
+      li.className = monster.hp <= 0 ? 'dead' : '';
+      li.title = '点击锁定这只';
       const name = document.createElement('b');
-      name.textContent = p.name;
+      name.textContent = `${monster.index}. ${monster.name}`;
       const hp = document.createElement('span');
-      hp.textContent = `${p.hp}/${p.max_hp}`;
-      li.append(name, hp);
+      hp.textContent = `${monster.hp}/${monster.max_hp}`;
+      const bar = document.createElement('i');
+      bar.className = 'hp-bar';
+      bar.style.width = `${Math.max(0, Math.round((monster.hp / Math.max(1, monster.max_hp)) * 100))}%`;
+      li.append(name, hp, bar);
+      if (monster.hp > 0) {
+        li.onclick = () => combatAction('attack', monster.id);
+      }
       ul.appendChild(li);
     });
+  }
+
+  function renderParticipants(list) {
+    renderCombat({ participants: list });
   }
 
   function startCombatTimer() {
@@ -542,11 +569,12 @@
     });
   }
 
-  function combatAction(action) {
+  function combatAction(action, targetId) {
     if (!state.combat) return;
-    let target;
-    if (action === 'attack') {
-      target = state.combat.participants?.find?.((p) => p.side === 'monster' && (p.hp ?? 1) > 0)?.id;
+    let target = targetId;
+    if (action === 'attack' && !target) {
+      target = state.combat.queue?.find((m) => m.hp > 0)?.id
+        ?? state.combat.participants?.find?.((p) => p.side === 'monster' && (p.hp ?? 1) > 0)?.id;
     }
     state.socket.emit('combat_action', { combat_id: state.combat.combat_id, action, target_id: target });
     setCombatButtons(false);

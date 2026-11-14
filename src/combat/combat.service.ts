@@ -56,6 +56,8 @@ interface Runtime {
   timer: NodeJS.Timeout | null;
   resolving: boolean;
   roundDeadline: number;
+  /** 玩家最近一次锁定的目标，之后不操作也继续打它 */
+  preferredTarget?: string;
 }
 
 @Injectable()
@@ -173,6 +175,42 @@ export class CombatService implements OnModuleDestroy {
     return monster.custom_name ?? (monster as any).display_name ?? `怪物 Lv.${monster.level}`;
   }
 
+  private playerView(runtime: Runtime) {
+    const player = runtime.participants.find((p) => p.side === 'player');
+    if (!player) return null;
+    return {
+      name: player.name,
+      hp: player.hp,
+      max_hp: player.maxHp,
+      attack: player.attack,
+      defense: player.defense,
+      level: player.level,
+    };
+  }
+
+  private monsterView(runtime: Runtime) {
+    return runtime.participants
+      .filter((p) => p.side === 'monster')
+      .map((monster, index) => ({
+        index: index + 1,
+        id: monster.id,
+        name: monster.name,
+        hp: monster.hp,
+        max_hp: monster.maxHp,
+        level: monster.level,
+        alive: monster.alive,
+      }));
+  }
+
+  /** 聊天里每回合都能看到的硬指标，不依赖模型叙述 */
+  private statusText(runtime: Runtime): string {
+    const player = runtime.participants.find((p) => p.side === 'player');
+    const queue = this.monsterView(runtime)
+      .map((m) => `${m.index}.${m.name} ${m.hp}/${m.max_hp}${m.alive ? '' : '（倒）'}`)
+      .join(' ');
+    return `你 ${player?.hp ?? 0}/${player?.maxHp ?? 0}｜攻 ${player?.attack ?? 0} 防 ${player?.defense ?? 0}｜${queue}`;
+  }
+
   private startRound(runtime: Runtime): void {
     if (runtime.state !== 'active') return;
     runtime.round += 1;
@@ -184,6 +222,10 @@ export class CombatService implements OnModuleDestroy {
       channel_id: runtime.channelId,
       round: runtime.round,
       deadline_ms: this.roundMs,
+      auto_attack: true,
+      you: this.playerView(runtime),
+      queue: this.monsterView(runtime),
+      status_text: this.statusText(runtime),
       participants: runtime.participants.map((p) => ({
         id: p.id,
         side: p.side,
@@ -215,6 +257,18 @@ export class CombatService implements OnModuleDestroy {
     }
     if (runtime.actions.has(characterId)) return { ok: false, message: '本回合已经提交过行动' };
 
+    if (action.action === 'attack') {
+      const monsters = runtime.participants.filter((p) => p.side === 'monster' && p.alive);
+      const chosen = action.target_id ? monsters.find((m) => m.id === action.target_id) : undefined;
+      const preferred = runtime.preferredTarget
+        ? monsters.find((m) => m.id === runtime.preferredTarget)
+        : undefined;
+      const target = chosen ?? preferred ?? monsters[0];
+      if (target) {
+        action.target_id = target.id;
+        if (chosen) runtime.preferredTarget = chosen.id;
+      }
+    }
     runtime.actions.set(characterId, action);
     if (this.allPlayersActed(runtime)) {
       if (runtime.timer) {
@@ -258,8 +312,12 @@ export class CombatService implements OnModuleDestroy {
         if (!actor.alive) continue;
 
         if (actor.side === 'player') {
-          const action = runtime.actions.get(actor.id) ?? { action: 'defend' as CombatActionType };
-          const timeout = !runtime.actions.has(actor.id);
+          const submitted = runtime.actions.get(actor.id);
+          const action = submitted ?? {
+            action: 'attack' as CombatActionType,
+            target_id: runtime.preferredTarget,
+          };
+          const timeout = !submitted;
           this.executePlayerAction(runtime, actor, action, events, timeout);
         } else {
           this.executeMonsterAction(runtime, actor, events);
@@ -275,10 +333,14 @@ export class CombatService implements OnModuleDestroy {
           { userId: (await this.characters.get(runtime.characterId))?.user_id, tier: 'small' },
         );
         runtime.log.push({ round: runtime.round, text: narration.text, events });
+        const statusText = this.statusText(runtime);
         this.events.emit('combat.round_result', {
           combat_id: runtime.id,
           channel_id: runtime.channelId,
           round: runtime.round,
+          you: this.playerView(runtime),
+          queue: this.monsterView(runtime),
+          status_text: statusText,
           results: runtime.participants.map((p) => ({
             id: p.id,
             side: p.side,
@@ -288,7 +350,7 @@ export class CombatService implements OnModuleDestroy {
             alive: p.alive,
           })),
           events,
-          narration: narration.text,
+          narration: `${narration.text}\n${statusText}`,
         });
         await this.persist(runtime);
         runtime.resolving = false;
@@ -319,8 +381,7 @@ export class CombatService implements OnModuleDestroy {
     const monsters = runtime.participants.filter((p) => p.side === 'monster' && p.alive);
 
     if (timeout) {
-      events.push(`${actor.name} 没来得及行动，自动防守`);
-      return;
+      events.push(`${actor.name} 没来得及下令，自动开火`);
     }
 
     switch (action.action) {

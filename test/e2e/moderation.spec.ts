@@ -81,7 +81,7 @@ describe('M1 验收：内容红线、AI 行为边界、成本降级与超时防�
       process.env.AI_DAILY_BUDGET = original;
     }
 
-    // ---- 超时默认防守 ----
+    // ---- 超时自动开火（不再要求玩家每回合打字） ----
     const from = { x: a.character.x, y: a.character.y };
     const distance = Math.hypot(harness.island.x - from.x, harness.island.y - from.y);
     socketA.emit('move', { angle: angleTo(from, harness.island), distance_nm: Math.min(20, distance) });
@@ -91,8 +91,14 @@ describe('M1 验收：内容红线、AI 行为边界、成本降级与超时防�
     socketA.emit('enter_island', { island_id: encounter.island_id });
     const roundStart = await roundStartPromise;
     expect(roundStart.round).toBe(1);
+    expect(roundStart.status_text).toContain('攻');
+    const monster = roundStart.participants.find((p: any) => p.side === 'monster');
+    expect(monster).toBeTruthy();
 
     const roundResult = await waitFor(socketA, 'combat_round_result', undefined, 6000);
-    expect(roundResult.events.join('；')).toContain('防守');
+    expect(roundResult.events.join('；')).toContain('自动开火');
+    expect(roundResult.status_text).toContain('你 ');
+    const hurt = roundResult.queue.find((m: any) => m.id === monster.id);
+    expect(hurt.hp).toBeLessThan(monster.hp);
   }, 40000);
 });
