@@ -34,6 +34,12 @@ const DEFAULT_LARGE_OPENROUTER = [
   'meta-llama/llama-3.3-70b-instruct:free',
 ];
 
+const PROVIDER_RANK: Record<string, number> = { siliconflow: 0, nvidia: 1, openrouter: 2, custom: 3 };
+
+function providerRank(provider: string): number {
+  return PROVIDER_RANK[provider] ?? 5;
+}
+
 function splitList(value: string): string[] {
   return value
     .split(/[,;\n]/)
@@ -121,6 +127,31 @@ export class AiGatewayService {
       }
     }
 
+    // 硅基流动（SiliconFlow）：免费额度较宽松，作为小模型主力
+    const siliconKeys = splitList(envStr('SILICONFLOW_API_KEYS', '') || envStr('SILICONFLOW_API_KEY', ''));
+    const siliconBase = envStr('SILICONFLOW_BASE_URL', 'https://api.siliconflow.cn/v1');
+    const siliconModels = parseModels(
+      envStr('SILICONFLOW_MODELS', ''),
+      ['Qwen/Qwen2.5-7B-Instruct', 'Qwen/Qwen2.5-14B-Instruct'],
+      ['Qwen/Qwen2.5-72B-Instruct'],
+    );
+    if (siliconKeys.length > 0) {
+      for (const key of siliconKeys) {
+        for (const entry of siliconModels) {
+          list.push({
+            provider: 'siliconflow',
+            baseUrl: siliconBase,
+            apiKey: key,
+            model: entry.model,
+            tier: entry.tier,
+            cooldownUntil: 0,
+            failures: 0,
+            calls: 0,
+          });
+        }
+      }
+    }
+
     // 兼容旧的单模型配置
     const legacyBase = envStr('AI_BASE_URL');
     const legacyKey = envStr('AI_API_KEY');
@@ -161,10 +192,15 @@ export class AiGatewayService {
     const now = Date.now();
     const sameTier = this.endpoints.filter((e) => e.tier === tier);
     const other = this.endpoints.filter((e) => e.tier !== tier);
-    // 同层优先；冷却中的排到最后；同优先级按调用次数均衡
+    // 同层优先；冷却中的剔除；失败少的优先；硅基流动额度宽裕，排在同层前面
     return [...sameTier, ...other]
       .filter((e) => e.cooldownUntil <= now)
-      .sort((a, b) => a.calls - b.calls || a.failures - b.failures);
+      .sort(
+        (a, b) =>
+          providerRank(a.provider) - providerRank(b.provider) ||
+          a.failures - b.failures ||
+          a.calls - b.calls,
+      );
   }
 
   async call(purpose: string, prompt: string, opts: CallOptions = {}): Promise<string> {

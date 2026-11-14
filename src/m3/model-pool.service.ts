@@ -21,6 +21,7 @@ export class ModelPoolService implements OnModuleInit {
     if (count > 0) return;
     const rows: Partial<ModelPool>[] = [];
     const providers: { name: string; raw: string }[] = [
+      { name: 'siliconflow', raw: envStr('SILICONFLOW_MODELS', '') },
       { name: 'openrouter', raw: envStr('OPENROUTER_MODELS', '') },
       { name: 'nvidia', raw: envStr('NVIDIA_MODELS', '') },
     ];

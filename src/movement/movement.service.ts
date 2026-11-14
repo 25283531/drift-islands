@@ -234,7 +234,7 @@ export class MovementService {
       const raced = await Promise.race([
         this.narrator.render(mode, data, opts),
         new Promise<null>((resolve) => {
-          const timer = setTimeout(() => resolve(null), 2500);
+          const timer = setTimeout(() => resolve(null), 4000);
           timer.unref?.();
         }),
       ]);
@@ -257,7 +257,7 @@ export class MovementService {
           { userId, tier: 'small' },
         ),
         new Promise<null>((resolve) => {
-          const timer = setTimeout(() => resolve(null), 2500);
+          const timer = setTimeout(() => resolve(null), 4000);
           timer.unref?.();
         }),
       ]);
@@ -326,4 +326,5 @@ export class MovementService {
     };
   }
 }
+
 
