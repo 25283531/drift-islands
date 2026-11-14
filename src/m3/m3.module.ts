@@ -7,6 +7,7 @@ import { ModerationRecord } from '../database/entities/chat.entities';
 import { ModelPool, WorldEvent } from '../database/entities/world.entities';
 import { AiModule } from '../ai/ai.module';
 import { M4Module } from '../m4/m4.module';
+import { M5Module } from '../m5/m5.module';
 import { CharactersModule } from '../characters/characters.module';
 import { WorldModule } from '../world/world.module';
 import { AdminController } from './admin.controller';
@@ -38,6 +39,7 @@ import { TeamService, TradeService } from './social.service';
     WorldModule,
     AiModule,
     M4Module,
+    M5Module,
   ],
   controllers: [AdminController],
   providers: [
@@ -53,4 +55,5 @@ import { TeamService, TradeService } from './social.service';
   exports: [TeamService, TradeService, ConflictService, SkillsService, FatigueService, ProtectionService, MonsterAiService, ModelPoolService],
 })
 export class M3Module {}
+
 

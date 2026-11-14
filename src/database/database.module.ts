@@ -12,6 +12,7 @@ import { Channel, ChatMessage, ModerationRecord } from './entities/chat.entities
 import { AiQuota, ModelPool, ResourceRegistry, WorldEvent, WorldState } from './entities/world.entities';
 import { CombatSession } from './entities/combat.entity';
 import { CreatorReward, IslandRating, Report } from './entities/m4.entities';
+import { Feedback } from './entities/m5.entities';
 import { SeedService } from './seed.service';
 
 export const ALL_ENTITIES = [
@@ -40,6 +41,7 @@ export const ALL_ENTITIES = [
   IslandRating,
   CreatorReward,
   Report,
+  Feedback,
 ];
 
 function buildOptions() {
@@ -78,4 +80,5 @@ function buildOptions() {
   exports: [SeedService, TypeOrmModule],
 })
 export class DatabaseModule {}
+
 

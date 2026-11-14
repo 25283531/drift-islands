@@ -1,5 +1,5 @@
-import { describe, expect, it } from 'vitest';
-import { MENU_TEXT, parseDirection, parseDistance, parseIntent, pickTargetIndex } from '../../src/game/commands';
+﻿import { describe, expect, it } from 'vitest';
+import { MENU_TEXT, parseDirection, parseDistance, parseIntent, parseRating, pickTargetIndex } from '../../src/game/commands';
 import { extractIslandDraft } from '../../src/game/island-text';
 
 describe('聊天室指令解析', () => {
@@ -70,3 +70,21 @@ describe('一段话造岛抽取', () => {
     expect(extracted.missing.map((item) => item.id)).toContain('monsters');
   });
 });
+
+
+
+  describe('评分/榜单/举报指令', () => {
+    it('「评分5」「评分五」都能解析，越界返回 null', () => {
+      expect(parseIntent('评分5')).toBe('rate');
+      expect(parseRating('评分5')).toBe(5);
+      expect(parseRating('评分五')).toBe(5);
+      expect(parseRating('评分9')).toBeNull();
+      expect(parseRating('评分')).toBeNull();
+    });
+    it('榜单与举报上一条', () => {
+      expect(parseIntent('榜单')).toBe('board');
+      expect(parseIntent('排行榜')).toBe('board');
+      expect(parseIntent('举报上一条')).toBe('report_last');
+    });
+  });
+

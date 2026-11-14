@@ -1,11 +1,14 @@
 import { afterAll, beforeAll, describe, expect, it } from 'vitest';
+import { DataSource } from 'typeorm';
 import { Socket } from 'socket.io-client';
+import { Character } from '../../src/database/entities/character.entities';
 import { FIXED_IDS } from '../../src/database/seed.service';
 import { Harness, authSocket, closeHarness, connectSocket, createHarness, loginAndCreateCharacter, waitFor } from './helpers';
 
 describe('聊天室文字驱动（e2e）', () => {
   let harness: Harness;
   let socket: Socket;
+  let other: Socket;
   let character: any;
 
   beforeAll(async () => {
@@ -14,10 +17,14 @@ describe('聊天室文字驱动（e2e）', () => {
     character = created.character;
     socket = await connectSocket(harness.port);
     await authSocket(socket, created.token, character.id);
+
+    const second = await loginAndCreateCharacter(harness.baseUrl, '文字玩家乙', '阿帆');
+    other = await connectSocket(harness.port);
+    await authSocket(other, second.token, second.character.id);
   }, 40000);
 
   afterAll(async () => {
-    await closeHarness(harness, [socket]);
+    await closeHarness(harness, [socket, other]);
   });
 
   it('「菜单」返回可用操作', async () => {
@@ -65,5 +72,36 @@ describe('聊天室文字驱动（e2e）', () => {
     const cancelled = waitFor(socket, 'narration', (p) => p.text.includes('先不做'), 8000);
     socket.emit('chat', { channel_id: FIXED_IDS.SEA_CHANNEL, text: '取消' });
     await cancelled;
+  });
+
+  it('「评分5」给脚下的岛打分，「榜单」能读到', async () => {
+    const ds = harness.app.get(DataSource);
+    await ds.getRepository(Character).update({ id: character.id }, { island_id: FIXED_IDS.PRESET_ISLAND });
+
+    const rated = waitFor(socket, 'narration', (p) => p.text.includes('打 5 分'), 10000);
+    socket.emit('chat', { channel_id: FIXED_IDS.SEA_CHANNEL, text: '评分5' });
+    expect((await rated).text).toContain('当前评分');
+
+    const board = waitFor(socket, 'narration', (p) => p.text.includes('岛屿榜'), 10000);
+    socket.emit('chat', { channel_id: FIXED_IDS.SEA_CHANNEL, text: '榜单' });
+    expect((await board).text).toContain('分');
+  });
+
+  it('「举报上一条」举报别人最近一条发言', async () => {
+    const ds = harness.app.get(DataSource);
+    await ds.getRepository(Character).update({ id: character.id }, { island_id: null });
+
+    const said = waitFor(
+      socket,
+      'chat_message',
+      (d) => Boolean(d.message?.sender_character_id) && d.message.sender_character_id !== character.id,
+      8000,
+    );
+    other.emit('chat', { channel_id: FIXED_IDS.SEA_CHANNEL, text: '这条会被举报' });
+    await said;
+
+    const reported = waitFor(socket, 'narration', (p) => p.text.includes('已举报'), 10000);
+    socket.emit('chat', { channel_id: FIXED_IDS.SEA_CHANNEL, text: '举报上一条' });
+    expect((await reported).text).toContain('GM');
   });
 });

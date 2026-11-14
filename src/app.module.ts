@@ -16,6 +16,7 @@ import { GameModule } from './game/game.module';
 import { M2Module } from './m2/m2.module';
 import { M3Module } from './m3/m3.module';
 import { M4Module } from './m4/m4.module';
+import { M5Module } from './m5/m5.module';
 
 @Module({
   imports: [
@@ -35,8 +36,10 @@ import { M4Module } from './m4/m4.module';
     M2Module,
     M3Module,
     M4Module,
+    M5Module,
   ],
   controllers: [AppController],
 })
 export class AppModule {}
+
 

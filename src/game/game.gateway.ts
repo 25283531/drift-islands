@@ -27,10 +27,13 @@ import { TeamService, TradeService } from '../m3/social.service';
 import { ConflictService } from '../m3/conflict.service';
 import { FatigueService, ProtectionService, SkillsService } from '../m3/growth.service';
 import { MonsterAiService } from '../m3/monster-ai.service';
+import { RatingService } from '../m4/rating.service';
+import { ReportService } from '../m4/report.service';
+import { FeedbackService } from '../m5/feedback.service';
 import { FIXED_IDS } from '../database/seed.service';
 import { GAME } from '../game/constants';
 import { envInt } from '../common/env';
-import { MENU_TEXT, parseDirection, parseDistance, parseIntent, pickTargetIndex } from '../game/commands';
+import { MENU_TEXT, parseDirection, parseDistance, parseIntent, parseRating, pickTargetIndex } from '../game/commands';
 import { bearingDeg, bearingText, round1 } from '../game/geo';
 interface SocketIdentity {
   userId: string;
@@ -89,6 +92,9 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly fatigue: FatigueService,
     private readonly protection: ProtectionService,
     private readonly monsterAi: MonsterAiService,
+    private readonly rating: RatingService,
+    private readonly reports: ReportService,
+    private readonly feedback: FeedbackService,
   ) {}
 
   handleConnection(client: Socket): void {
@@ -1300,6 +1306,65 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
           if (fromSocket) {
             fromSocket.emit('narration', { channel_id: FIXED_IDS.SEA_CHANNEL, text: `${character.name} 拒绝了交易。`, kind: 'trade' });
           }
+        } catch (err) {
+          say((err as Error).message);
+        }
+        return true;
+      }
+      case 'rate': {
+        if (!character.island_id) return say('先上岛，再给脚下的岛打分。发「上岛」。'), true;
+        const score = parseRating(text);
+        if (!score) return say('发「评分5」这样，1–5 分。'), true;
+        try {
+          const summary = await this.rating.rate(character.user_id, character.island_id, score);
+          const avg = summary.avg_rating == null ? '-' : summary.avg_rating;
+          say(`已给「${summary.name}」打 ${score} 分。当前评分 ${summary.score}（${summary.rating_count} 人评价，均分 ${avg}）。`);
+        } catch (err) {
+          say((err as Error).message);
+        }
+        return true;
+      }
+      case 'board': {
+        try {
+          const list = await this.rating.board(5);
+          if (!list.length) return say('海上还没有岛。'), true;
+          say(
+            '岛屿榜：\n' +
+              list.map((row, index) => `${index + 1}. ${row.name} — ${row.score} 分（${row.visit_count} 次到访）`).join('\n'),
+          );
+        } catch (err) {
+          say((err as Error).message);
+        }
+        return true;
+      }
+      case 'report_last': {
+        try {
+          const recent = await this.chat.recent(channelId, 20);
+          const last = [...recent].reverse().find((message) => message.sender_character_id && message.sender_character_id !== character.id);
+          if (!last) return say('这个频道里还没有别人的发言可举报。'), true;
+          await this.reports.create({
+            reporterUserId: character.user_id,
+            targetType: 'chat_message',
+            targetId: last.id,
+            category: 'other',
+            detail: '聊天指令举报',
+          });
+          say(`已举报上一条发言：「${last.content.slice(0, 40)}」。GM 会复核。`);
+        } catch (err) {
+          say((err as Error).message);
+        }
+        return true;
+      }
+      case 'feedback': {
+        const content = text.replace(/^(反馈|建议|报\s*bug)\s*[:：]?\s*/i, '').trim();
+        if (content.length < 2) return say('发「反馈 你遇到的问题」，我记下来。'), true;
+        try {
+          await this.feedback.create({
+            userId: character.user_id,
+            characterId: character.id,
+            content,
+          });
+          say('记下了，GM 会看到这条反馈。');
         } catch (err) {
           say((err as Error).message);
         }

@@ -1,4 +1,4 @@
-/**
+﻿/**
  * 聊天室文字指令解析（M3.5 交互改造）。
  * 纯函数，便于单测；网关只负责执行与回话。
  */
@@ -22,6 +22,10 @@ export type CommandIntent =
   | 'settle'
   | 'settle_confirm'
   | 'trade'
+  | 'rate'
+  | 'board'
+  | 'report_last'
+  | 'feedback'
   | 'trade_accept'
   | 'trade_decline'
   | 'island_create'
@@ -52,6 +56,10 @@ const RULES: { intent: CommandIntent; words: string[] }[] = [
   { intent: 'settle_confirm', words: ['确认驻扎', '确定驻扎'] },
   { intent: 'trade_accept', words: ['接受交易', '同意交易', '成交'] },
   { intent: 'trade_decline', words: ['拒绝交易', '不换了', '拒绝'] },
+  { intent: 'rate', words: ['评分', '打分', '评价'] },
+  { intent: 'board', words: ['榜单', '排行榜', '排名', '岛屿榜'] },
+  { intent: 'report_last', words: ['举报上一条', '举报上一句', '举报刚才', '举报上条'] },
+  { intent: 'feedback', words: ['反馈', '报bug', '报 bug', '建议'] },
   { intent: 'trade', words: ['交易', '交换', '换东西'] },
 ];
 
@@ -78,6 +86,10 @@ export const MENU_TEXT = [
   '· 搜刮 — 在岛上找物资',
   '· 造岛 — 用一段话描述你的岛',
   '· 组队 / 队伍 / 技能 / 交易 / 状态',
+  '· 评分5 — 给脚下的岛打分（1–5）',
+  '· 榜单 — 看岛屿评分前几名',
+  '· 举报上一条 — 举报频道里最近一条别人的发言',
+  '· 反馈 内容 — 把 bug 或建议发给 GM',
   '随时发「菜单」回到这里。',
 ].join('\n');
 
@@ -130,6 +142,16 @@ export function parseDistance(raw: string): number | null {
   return Math.min(30, Math.max(0.5, value));
 }
 
+/** 评分：1–5，支持阿拉伯数字与中文数字 */
+export function parseRating(raw: string): number | null {
+  const text = (raw ?? '').trim();
+  const match = /(\d+|[一二两三四五])/.exec(text);
+  if (!match) return null;
+  const value = toNumber(match[1]);
+  if (value === null || value < 1 || value > 5) return null;
+  return value;
+}
+
 /** 是否像一个方向回答（用于“启航”后的追问态） */
 export function looksLikeDirection(raw: string): boolean {
   return parseDirection(raw) !== null;
@@ -160,3 +182,5 @@ export function pickTargetIndex(text: string, monsters: { name?: string | null }
   const byName = monsters.findIndex((monster) => monster.name && raw.includes(monster.name));
   return byName >= 0 ? byName : null;
 }
+
+

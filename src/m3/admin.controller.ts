@@ -26,6 +26,8 @@ import { envStr } from '../common/env';
 import { ModelPoolService } from './model-pool.service';
 import { IncentiveService } from '../m4/incentive.service';
 import { ReportService } from '../m4/report.service';
+import { FeedbackService } from '../m5/feedback.service';
+import { MetricsService } from '../m5/metrics.service';
 
 /** GM 令牌校验：请求头 x-admin-token 与 ADMIN_TOKEN 一致 */
 @Injectable()
@@ -50,6 +52,8 @@ export class AdminController {
     private readonly pool: ModelPoolService,
     private readonly reports: ReportService,
     private readonly incentives: IncentiveService,
+    private readonly metrics: MetricsService,
+    private readonly feedback: FeedbackService,
   ) {}
 
   @Get('overview')
@@ -148,5 +152,26 @@ export class AdminController {
   @Post('rewards/settle')
   async settleRewards(@Body() body: { period_day?: number; actor?: string }) {
     return this.incentives.settle(body?.period_day, body?.actor ?? 'gm');
+  }
+
+  @Get('metrics')
+  async metricsSnapshot() {
+    return this.metrics.snapshot();
+  }
+
+  @Get('safety-report')
+  async safetyReport(@Query('days') days?: string) {
+    const n = Number(days ?? 7);
+    return this.metrics.safetyReport(Number.isFinite(n) && n > 0 ? Math.min(n, 30) : 7);
+  }
+
+  @Get('feedback')
+  async listFeedback(@Query('status') status?: string) {
+    return this.feedback.list(status);
+  }
+
+  @Post('feedback/:id/close')
+  async closeFeedback(@Param('id') id: string, @Body() body: { actor?: string }) {
+    return this.feedback.close(id, body?.actor ?? 'gm');
   }
 }
