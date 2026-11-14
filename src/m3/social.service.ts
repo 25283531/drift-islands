@@ -59,8 +59,7 @@ export class TeamService {
     return { target, team };
   }
 
-  async join(characterId: string): Promise<{ team: Team; character: Character }> {
-    const character = await this.must(characterId);
+  async join(characterId: string): Promise<{ team: Team; character: Character }> {    const character = await this.must(characterId);
     const teamId = this.invites.get(character.id);
     if (!teamId) throw new Error('没有待接受的邀请');
     const team = await this.teams.findOne({ where: { id: teamId } });
@@ -72,6 +71,21 @@ export class TeamService {
     character.team_id = team.id;
     await this.characters.save(character);
     this.invites.delete(character.id);
+    return { team, character };
+  }
+
+  /** 文字入队：按队名直接加入（M3.5 简化，队满 5 人拒绝） */
+  async joinByName(characterId: string, teamName: string): Promise<{ team: Team; character: Character }> {
+    const character = await this.must(characterId);
+    if (character.team_id) throw new Error('你已经在队伍中');
+    const name = (teamName ?? '').trim();
+    if (!name) throw new Error('告诉我队名');
+    const team = await this.teams.findOne({ where: { name } });
+    if (!team) throw new Error(`没有找到队伍「${name}」`);
+    const count = await this.characters.count({ where: { team_id: team.id } });
+    if (count >= 5) throw new Error('队伍已满（最多 5 人）');
+    character.team_id = team.id;
+    await this.characters.save(character);
     return { team, character };
   }
 
@@ -376,11 +390,47 @@ export class TradeService {
     };
   }
 
-  async dropsNear(x: number, y: number, radius = 5) {
-    const all = await this.drops.find({ take: 50, order: { created_world_day: 'DESC' } });
+  async dropsNear(x: number, y: number, radius = 5) {    const all = await this.drops.find({ take: 50, order: { created_world_day: 'DESC' } });
     return all
       .filter((drop) => distanceNm(x, y, drop.x, drop.y) <= radius)
       .map((drop) => ({ drop_id: drop.id, distance: round1(distanceNm(x, y, drop.x, drop.y)), world_day: drop.created_world_day }));
+  }
+
+  // ------------------------------------------------------------ 对话式交易辅助
+
+  async itemsOf(characterId: string): Promise<{ id: string; name: string; quantity: number }[]> {
+    const rows = await this.items.find({ where: { owner_type: 'character', owner_id: characterId }, take: 40 });
+    return rows.map((row) => ({ id: row.id, name: row.name, quantity: row.quantity }));
+  }
+
+  /** 按名字找随身物；支持“零件”“药”这类简称 */
+  async findOwnedByName(characterId: string, keyword: string): Promise<Item[]> {
+    const clean = (keyword ?? '').trim();
+    if (!clean) return [];
+    const rows = await this.items.find({ where: { owner_type: 'character', owner_id: characterId } });
+    const exact = rows.filter((row) => row.name === clean);
+    if (exact.length > 0) return exact;
+    return rows.filter((row) => row.name.includes(clean) || clean.includes(row.name));
+  }
+
+  /** 某个角色收到的待处理交易（最近一笔） */
+  async pendingFor(characterId: string): Promise<{ trade_id: string; from_id: string; from_name: string; offer: string[]; want: string[] } | null> {
+    const now = Date.now();
+    const entries = [...this.pending.values()]
+      .filter((trade) => trade.toId === characterId && now - trade.createdAt <= TRADE_TTL_MS)
+      .sort((a, b) => b.createdAt - a.createdAt);
+    const trade = entries[0];
+    if (!trade) return null;
+    const from = await this.characters.findOne({ where: { id: trade.fromId } });
+    const offer = await this.namesOf(trade.offerIds);
+    const want = await this.namesOf(trade.wantIds);
+    return { trade_id: trade.id, from_id: trade.fromId, from_name: from?.name ?? '有人', offer, want };
+  }
+
+  private async namesOf(ids: string[]): Promise<string[]> {
+    if (ids.length === 0) return [];
+    const rows = await this.items.find({ where: { id: In(ids) } });
+    return rows.map((row) => `${row.name}×${row.quantity}`);
   }
 
   private near(a: Character, b: Character): boolean {

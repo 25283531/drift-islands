@@ -1,4 +1,4 @@
-import { Injectable } from '@nestjs/common';
+﻿import { Injectable, Logger } from '@nestjs/common';
 import { Character, Ship } from '../database/entities/character.entities';
 import { Island } from '../database/entities/island.entities';
 import { NarratorService } from '../ai/narrator.service';
@@ -40,6 +40,7 @@ const SCENERY = [
 
 @Injectable()
 export class MovementService {
+  private readonly logger = new Logger(MovementService.name);
   constructor(
     private readonly characters: CharactersService,
     private readonly world: WorldService,
@@ -89,7 +90,13 @@ export class MovementService {
 
     const state = await this.world.getState();
     // 随机漂流 1 世界小时；漂流不烧油（随浪走，§4.1）
-    const angle = Math.random() * 360;
+    // 靠近边界时把方向掰回海域中心，避免顶着边界漂流 0 距离、时间也不推进
+    let angle = Math.random() * 360;
+    const fromCenter = Math.hypot(character.x, character.y);
+    if (fromCenter > state.sea_radius_nm * 0.8) {
+      const inward = (Math.atan2(-character.y, -character.x) * 180) / Math.PI;
+      angle = (inward + (Math.random() * 60 - 30) + 360) % 360;
+    }
     const distance = ship.speed;
     const plan = planMove({
       x: character.x,
@@ -102,6 +109,8 @@ export class MovementService {
       seaRadius: state.sea_radius_nm,
     });
     plan.fuelUsed = 0;
+    // 即使被边界截断，漂流也消耗 1 世界小时，保证遭遇保底计时能推进
+    if (plan.hours < 0.5) plan.hours = 1;
 
     const result = await this.finalize(character, ship, plan, 'drift');
     return result;
@@ -157,7 +166,7 @@ export class MovementService {
     const time = advanced.info;
     const isNight = time.day_night === 'night';
 
-    const encounter = await this.resolveEncounter(character, time, plan.hours, isNight, warnings);
+    const encounter = await this.resolveEncounter(character, time, plan.hours, isNight, warnings, mode === 'drift' ? 90 : undefined);
 
     await this.characters.save(character);
     await this.characters.saveShip(ship);
@@ -172,29 +181,22 @@ export class MovementService {
           : `消耗燃料 ${round1(plan.fuelUsed)} 单位。`;
 
     const directionText = bearingText(plan.bearing);
-    const narration = await this.narrator.render(
-      mode === 'sail' ? 'sail' : 'drift',
-      {
-        direction_text: directionText,
-        distance: plan.distance,
-        hours: plan.hours,
-        fuel_text: fuelText,
-        scenery: SCENERY[Math.floor(Math.random() * SCENERY.length)],
-        boundary_text: warnings.find((w) => w.type === 'sea_boundary')?.text ?? '',
-      },
-      { userId: character.user_id, tier: 'small' },
-    );
+    const narration = await this.renderTravelFast(mode, {
+      direction_text: directionText,
+      distance: plan.distance,
+      hours: plan.hours,
+      fuel_text: fuelText,
+      scenery: SCENERY[Math.floor(Math.random() * SCENERY.length)],
+      boundary_text: warnings.find((w) => w.type === 'sea_boundary')?.text ?? '',
+    }, { userId: character.user_id, tier: 'small' }, mode === 'sail'
+      ? `你把舵转向${directionText}，${round1(plan.distance)} 海里后，${SCENERY[Math.floor(Math.random() * SCENERY.length)]}。这一程耗去 ${plan.hours} 个世界小时，${fuelText}`
+      : `你松开舵，让洋流带着船走。一个世界小时过去，船漂出 ${round1(plan.distance)} 海里，${fuelText}`);
 
     let encounterNarration: TravelResult['encounter_narration'];
     if (encounter) {
-      encounterNarration = await this.narrator.render(
-        'encounter',
-        {
-          name: encounter.island.name,
-          distance: encounter.distance,
-          hint: encounter.hint,
-        },
-        { userId: character.user_id, tier: 'small' },
+      encounterNarration = await this.renderEncounterFast(
+        encounter,
+        character.user_id,
       );
     }
 
@@ -219,12 +221,64 @@ export class MovementService {
    * 遭遇（§4.1）+ 2 世界小时必遇兜底。
    * 兜底实现：连续航行累计 2 世界小时未遭遇时，洋流把船送到最近岛屿的遭遇圈内。
    */
+  // ------------------------------------------------------------ 叙述加速
+
+  /** 模型 2.5 秒内回不来就用模板，保证航行/遭遇事件不被免费模型队列卡住 */
+  private async renderTravelFast(
+    mode: 'sail' | 'drift',
+    data: Record<string, any>,
+    opts: { userId: string; tier: 'small' },
+    fallback: string,
+  ): Promise<{ text: string; source: string; degraded: boolean }> {
+    try {
+      const raced = await Promise.race([
+        this.narrator.render(mode, data, opts),
+        new Promise<null>((resolve) => {
+          const timer = setTimeout(() => resolve(null), 2500);
+          timer.unref?.();
+        }),
+      ]);
+      if (raced) return raced;
+    } catch {
+      /* 回退模板 */
+    }
+    return { text: fallback, source: 'template', degraded: true };
+  }
+
+  private async renderEncounterFast(
+    encounter: NonNullable<TravelResult['encounter']>,
+    userId: string,
+  ): Promise<{ text: string; source: string; degraded: boolean }> {
+    try {
+      const raced = await Promise.race([
+        this.narrator.render(
+          'encounter',
+          { name: encounter.island.name, distance: encounter.distance, hint: encounter.hint },
+          { userId, tier: 'small' },
+        ),
+        new Promise<null>((resolve) => {
+          const timer = setTimeout(() => resolve(null), 2500);
+          timer.unref?.();
+        }),
+      ]);
+      if (raced) return raced;
+    } catch {
+      /* 回退模板 */
+    }
+    return {
+      text: `${encounter.island.name}的轮廓从雾里浮出来。${encounter.hint}`,
+      source: 'template',
+      degraded: true,
+    };
+  }
+
   private async resolveEncounter(
     character: Character,
     time: WorldTimeInfo,
     hours: number,
     isNight: boolean,
     warnings: { type: string; text: string }[],
+    guaranteeMinutes?: number,
   ): Promise<TravelResult['encounter']> {
     const key = `encounter:char:${character.id}`;
     const elapsedMinutes = Number.parseInt((await this.kv.get(key)) ?? '0', 10);
@@ -242,7 +296,9 @@ export class MovementService {
     }
 
     const accumulated = elapsedMinutes + Math.round(hours * 60);
-    if (accumulated < GAME.ENCOUNTER_GUARANTEE_MINUTES) {
+    const threshold = guaranteeMinutes ?? GAME.ENCOUNTER_GUARANTEE_MINUTES;
+    this.logger.log(`遭遇判定 char=${character.id} elapsed=${elapsedMinutes} +${Math.round(hours * 60)} acc=${accumulated} thr=${threshold}`);
+    if (accumulated < threshold) {
       await this.kv.set(key, String(accumulated), 6 * 3600);
       return undefined;
     }
@@ -270,3 +326,4 @@ export class MovementService {
     };
   }
 }
+

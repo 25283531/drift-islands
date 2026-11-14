@@ -30,7 +30,7 @@ import { MonsterAiService } from '../m3/monster-ai.service';
 import { FIXED_IDS } from '../database/seed.service';
 import { GAME } from '../game/constants';
 import { envInt } from '../common/env';
-import { MENU_TEXT, parseDirection, parseDistance, parseIntent } from '../game/commands';
+import { MENU_TEXT, parseDirection, parseDistance, parseIntent, pickTargetIndex } from '../game/commands';
 import { bearingDeg, bearingText, round1 } from '../game/geo';
 interface SocketIdentity {
   userId: string;
@@ -44,7 +44,29 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   private readonly sockets = new Map<string, Socket>();
   private readonly graceTimers = new Map<string, NodeJS.Timeout>();
-  private readonly commandStates = new Map<string, { mode: 'sail_direction' | 'sail_distance' | 'island_text' | 'island_fill' | 'confirm_island'; angle?: number }>();
+  private readonly commandStates = new Map<
+    string,
+    {
+      mode:
+        | 'sail_direction'
+        | 'sail_distance'
+        | 'island_text'
+        | 'island_fill'
+        | 'confirm_island'
+        | 'trade_target'
+        | 'trade_offer'
+        | 'trade_want'
+        | 'trade_confirm'
+        | 'settle_confirm'
+        | 'team_join';
+      angle?: number;
+      targetId?: string;
+      targetName?: string;
+      offerIds?: string[];
+      wantIds?: string[];
+      wantNames?: string[];
+    }
+  >();
 
   constructor(
     private readonly auth: AuthService,
@@ -1002,6 +1024,117 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       return true;
     }
 
+    // —— 对话式交易
+    if (state?.mode === 'trade_target') {
+      const target = await this.characters.findByName(text);
+      if (!target) {
+        say('没找到这个角色。发对方的角色名，或「取消」。');
+        return true;
+      }
+      state.targetId = target.id;
+      state.targetName = target.name;
+      state.mode = 'trade_offer';
+      const items = await this.trade.itemsOf(character.id);
+      say(
+        `好，和 ${target.name} 换。你给出什么？发物品名` +
+          (items.length ? `（你身上有：${items.map((item) => item.name).join('、')}）` : '（你身上没有东西）') +
+          '，不想给就说「无」。',
+      );
+      return true;
+    }
+    if (state?.mode === 'trade_offer') {
+      if (/^(无|没有|不给|空手)$/.test(text)) {
+        state.offerIds = [];
+      } else {
+        const items = await this.trade.findOwnedByName(character.id, text);
+        if (items.length === 0) {
+          say('你身上没有这样东西。发物品名，或「无」。');
+          return true;
+        }
+        state.offerIds = items.map((item) => item.id);
+      }
+      state.mode = 'trade_want';
+      say('你要对方给你什么？发物品名，没有就发「无」。');
+      return true;
+    }
+    if (state?.mode === 'trade_want') {
+      if (/^(无|没有|不要|空手)$/.test(text)) {
+        state.wantIds = [];
+      } else {
+        const items = await this.trade.findOwnedByName(state.targetId ?? '', text);
+        if (items.length === 0) {
+          say('对方身上没有这样东西。换个名字，或发「无」。');
+          return true;
+        }
+        state.wantIds = items.map((item) => item.id);
+        state.wantNames = items.map((item) => `${item.name}×${item.quantity}`);
+      }
+      state.mode = 'trade_confirm';
+      const offerItems = await this.trade.itemsOf(character.id);
+      const offerNames = offerItems.filter((item) => (state.offerIds ?? []).includes(item.id)).map((item) => item.name);
+      say(
+        `交易内容：你给 ${offerNames.join('、') || '什么都不给'}；` +
+          `换 ${(state.wantNames ?? []).join('、') || '什么都不用给'}。回复「确认交易」发出，或「取消」。`,
+      );
+      return true;
+    }
+    if (state?.mode === 'trade_confirm') {
+      if (/确认|成交|发出|可以/.test(text)) {
+        try {
+          const proposed = await this.trade.propose(
+            character.id,
+            state.targetName ?? '',
+            state.offerIds ?? [],
+            state.wantIds ?? [],
+          );
+          const targetSocket = this.sockets.get(state.targetId ?? '');
+          if (targetSocket) {
+            targetSocket.emit('narration', {
+              channel_id: FIXED_IDS.SEA_CHANNEL,
+              text: `${character.name} 想和你交易：给你 ${proposed.offer.map((i: any) => i.name).join('、') || '空手'}，要你 ${proposed.want.map((i: any) => i.name).join('、') || '什么都不用给'}。回复「接受交易」或「拒绝交易」。`,
+              kind: 'trade',
+            });
+          }
+          say(`交易邀请已发给 ${state.targetName}，等对方回复。`);
+        } catch (err) {
+          say((err as Error).message);
+        }
+        this.commandStates.delete(character.id);
+      } else {
+        say('回复「确认交易」发出，或「取消」。');
+      }
+      return true;
+    }
+
+    // —— 驻扎确认
+    if (state?.mode === 'settle_confirm') {
+      if (/确认|确定|驻扎|建/.test(text)) {
+        try {
+          const result = await this.garrison.settle(character, character.island_id ?? '');
+          client.emit('base_update', result);
+          say(result.narration ?? '基地立起来了。');
+        } catch (err) {
+          say((err as Error).message);
+        }
+        this.commandStates.delete(character.id);
+      } else {
+        say('回复「确认驻扎」建立基地，或「取消」。');
+      }
+      return true;
+    }
+
+    // —— 入队：等队名
+    if (state?.mode === 'team_join') {
+      try {
+        const joined = await this.team.joinByName(character.id, text);
+        say(`你加入了「${joined.team.name}」。发「队伍」看成员。`);
+        this.commandStates.delete(character.id);
+      } catch (err) {
+        say((err as Error).message);
+      }
+      return true;
+    }
+
     if (intent === 'menu' || intent === 'unknown') {
       if (intent === 'unknown') return false;
       say(MENU_TEXT);
@@ -1064,12 +1197,20 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       case 'flee': {
         const runtime = this.combat.activeFor(character.id);
         if (!runtime) return say('现在没有战斗。上岛遇到活物才会打起来。'), true;
-        const target = runtime.participants.find((p: any) => p.side === 'monster' && p.hp > 0);
+        const monsters = runtime.participants.filter((p: any) => p.side === 'monster' && p.hp > 0);
+        const index = intent === 'attack' ? pickTargetIndex(text, monsters) : null;
+        const target = index !== null ? monsters[index] : monsters[0];
         const result = await this.combat.submitAction(runtime.id, character.id, {
           action: intent === 'attack' ? 'attack' : intent === 'defend' ? 'defend' : 'flee',
           target_id: target?.id,
         } as any);
-        say(result.ok ? '动作已提交，等这一回合结算。' : result.message ?? '这个动作现在做不了。');
+        if (!result.ok) return say(result.message ?? '这个动作现在做不了。'), true;
+        if (intent === 'attack' && target) {
+          const position = monsters.findIndex((m: any) => m.id === target.id) + 1;
+          say(`你盯上了 ${target.name ?? '怪物'}（第 ${position} 只），动作已提交。`);
+        } else {
+          say('动作已提交，等这一回合结算。');
+        }
         return true;
       }
       case 'collect': {
@@ -1114,8 +1255,63 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         }
         return true;
       }
+      case 'team_join': {
+        const name = text.replace(/^(入队|加入队伍|申请入队)\s*/, '').trim();
+        if (!name) {
+          this.commandStates.set(character.id, { mode: 'team_join' });
+          return say('要加入哪个队？发队名。'), true;
+        }
+        try {
+          const joined = await this.team.joinByName(character.id, name);
+          say(`你加入了「${joined.team.name}」。发「队伍」看成员。`);
+        } catch (err) {
+          say((err as Error).message);
+        }
+        return true;
+      }
+      case 'settle': {
+        if (!character.island_id) return say('先上岛，再发「驻扎」。'), true;
+        this.commandStates.set(character.id, { mode: 'settle_confirm' });
+        say('确认在这座岛建立基地？回复「确认驻扎」或「取消」。');
+        return true;
+      }
+      case 'trade_accept': {
+        try {
+          const pending = await this.trade.pendingFor(character.id);
+          if (!pending) return say('现在没有待接受的交易。'), true;
+          const result = await this.trade.accept(character.id, pending.trade_id);
+          say(result.narration);
+          const fromSocket = this.sockets.get(pending.from_id);
+          if (fromSocket) {
+            fromSocket.emit('narration', { channel_id: FIXED_IDS.SEA_CHANNEL, text: `${character.name} 接受了交易。`, kind: 'trade' });
+          }
+        } catch (err) {
+          say((err as Error).message);
+        }
+        return true;
+      }
+      case 'trade_decline': {
+        try {
+          const pending = await this.trade.pendingFor(character.id);
+          if (!pending) return say('现在没有待接受的交易。'), true;
+          this.trade.decline(character.id, pending.trade_id);
+          say('你把交易推了回去。');
+          const fromSocket = this.sockets.get(pending.from_id);
+          if (fromSocket) {
+            fromSocket.emit('narration', { channel_id: FIXED_IDS.SEA_CHANNEL, text: `${character.name} 拒绝了交易。`, kind: 'trade' });
+          }
+        } catch (err) {
+          say((err as Error).message);
+        }
+        return true;
+      }
       case 'trade': {
-        say('面对面才能交易：先和对方站到同一座岛或 1 海里内，再说「和他换东西」，我会问你要换什么。');
+        const items = await this.trade.itemsOf(character.id);
+        this.commandStates.set(character.id, { mode: 'trade_target' });
+        say(
+          '面对面才能交易。和谁换？发对方的角色名。' +
+            (items.length ? '' : '（你身上没有东西，可能换不了什么）'),
+        );
         return true;
       }
       case 'island_create': {

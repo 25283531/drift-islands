@@ -18,7 +18,12 @@ export type CommandIntent =
   | 'skills'
   | 'team'
   | 'team_info'
+  | 'team_join'
+  | 'settle'
+  | 'settle_confirm'
   | 'trade'
+  | 'trade_accept'
+  | 'trade_decline'
   | 'island_create'
   | 'confirm'
   | 'cancel'
@@ -41,7 +46,12 @@ const RULES: { intent: CommandIntent; words: string[] }[] = [
   { intent: 'collect', words: ['搜刮', '收集', '捡', '搜寻'] },
   { intent: 'skills', words: ['技能', '领悟'] },
   { intent: 'team_info', words: ['队伍', '队友', '团队信息'] },
+  { intent: 'team_join', words: ['入队', '加入队伍', '申请入队'] },
   { intent: 'team', words: ['组队', '建队', '创建队伍'] },
+  { intent: 'settle', words: ['驻扎', '建基地', '安家'] },
+  { intent: 'settle_confirm', words: ['确认驻扎', '确定驻扎'] },
+  { intent: 'trade_accept', words: ['接受交易', '同意交易', '成交'] },
+  { intent: 'trade_decline', words: ['拒绝交易', '不换了', '拒绝'] },
   { intent: 'trade', words: ['交易', '交换', '换东西'] },
 ];
 
@@ -123,4 +133,30 @@ export function parseDistance(raw: string): number | null {
 /** 是否像一个方向回答（用于“启航”后的追问态） */
 export function looksLikeDirection(raw: string): boolean {
   return parseDirection(raw) !== null;
+}
+
+const CN_NUM: Record<string, number> = { 一: 1, 二: 2, 两: 3 - 1, 三: 3, 四: 4, 五: 5, 六: 6, 七: 7, 八: 8, 九: 9 };
+
+function toNumber(token: string): number | null {
+  if (/^\d+$/.test(token)) return Number(token);
+  const value = CN_NUM[token];
+  return value === undefined ? null : value;
+}
+
+/**
+ * 从指令里挑出要打的目标下标（0 基）。
+ * 支持“打第2只”“攻击2”“第二只”“打溺尸”。
+ */
+export function pickTargetIndex(text: string, monsters: { name?: string | null }[]): number | null {
+  if (monsters.length === 0) return null;
+  const raw = (text ?? '').trim();
+  const ordinal = /第\s*(\d+|[一二两三四五六七八九])\s*(?:只|个|名)?/.exec(raw);
+  const direct = /(?:打|攻击|砍|揍|打向)\s*(\d+|[一二两三四五六七八九])/.exec(raw);
+  const token = ordinal?.[1] ?? direct?.[1];
+  if (token) {
+    const value = toNumber(token);
+    if (value && value >= 1 && value <= monsters.length) return value - 1;
+  }
+  const byName = monsters.findIndex((monster) => monster.name && raw.includes(monster.name));
+  return byName >= 0 ? byName : null;
 }

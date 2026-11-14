@@ -94,6 +94,10 @@ export class CharactersService {
     return this.characters.find({ where: { user_id: userId }, order: { created_at: 'ASC' } });
   }
 
+  async findByName(name: string): Promise<Character | null> {
+    return this.characters.findOne({ where: { name: (name ?? '').trim() } });
+  }
+
   async get(characterId: string): Promise<Character | null> {
     return this.characters.findOne({ where: { id: characterId } });
   }

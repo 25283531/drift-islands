@@ -1,5 +1,5 @@
 import { describe, expect, it } from 'vitest';
-import { MENU_TEXT, parseDirection, parseDistance, parseIntent } from '../../src/game/commands';
+import { MENU_TEXT, parseDirection, parseDistance, parseIntent, pickTargetIndex } from '../../src/game/commands';
 import { extractIslandDraft } from '../../src/game/island-text';
 
 describe('聊天室指令解析', () => {
@@ -37,6 +37,16 @@ describe('聊天室指令解析', () => {
     expect(MENU_TEXT).toContain('启航');
     expect(MENU_TEXT).toContain('造岛');
     expect(MENU_TEXT).toContain('攻击');
+  });
+
+  it('可以指定打第几只怪物', () => {
+    const monsters = [{ name: '溺尸' }, { name: '拾荒者' }, { name: '藤壶蟹' }];
+    expect(pickTargetIndex('打第2只', monsters)).toBe(1);
+    expect(pickTargetIndex('攻击3', monsters)).toBe(2);
+    expect(pickTargetIndex('第二只', monsters)).toBe(1);
+    expect(pickTargetIndex('打拾荒者', monsters)).toBe(1);
+    expect(pickTargetIndex('攻击', monsters)).toBeNull();
+    expect(pickTargetIndex('打第9只', monsters)).toBeNull();
   });
 });
 
