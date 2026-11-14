@@ -4,7 +4,7 @@ import { Not, Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
 import { Channel } from '../database/entities/chat.entities';
 import { Character } from '../database/entities/character.entities';
-import { Island, Monster } from '../database/entities/island.entities';
+import { Island, Monster, MonsterKind } from '../database/entities/island.entities';
 import { ENCOUNTER_RANGE, PROTECTION } from '../game/constants';
 import { bearingDeg, bearingText, distanceNm, round1 } from '../game/geo';
 
@@ -20,6 +20,7 @@ export class IslandsService {
   constructor(
     @InjectRepository(Island) private readonly islands: Repository<Island>,
     @InjectRepository(Monster) private readonly monsters: Repository<Monster>,
+    @InjectRepository(MonsterKind) private readonly monsterKinds: Repository<MonsterKind>,
     @InjectRepository(Channel) private readonly channels: Repository<Channel>,
   ) {}
 
@@ -32,10 +33,19 @@ export class IslandsService {
   }
 
   async aliveMonsters(islandId: string): Promise<Monster[]> {
-    return this.monsters.find({
+    const rows = await this.monsters.find({
       where: { island_id: islandId, state: Not('dead') },
       order: { level: 'ASC' },
     });
+    if (rows.length === 0) return rows;
+    // 展示名：自定义怪物用 custom_name，预置怪物回填种类名（如「藤壶蟹」）
+    const kinds = await this.monsterKinds.find();
+    const nameOf = new Map(kinds.map((kind) => [kind.id, kind.name]));
+    return rows.map((monster) =>
+      Object.assign(monster, {
+        display_name: monster.custom_name ?? nameOf.get(monster.kind_id) ?? `怪物 Lv.${monster.level}`,
+      }),
+    );
   }
 
   encounterRange(isNight: boolean): number {

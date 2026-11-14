@@ -168,7 +168,7 @@ export class CombatService implements OnModuleDestroy {
   }
 
   private monsterName(monster: Monster): string {
-    return monster.custom_name ?? `怪物 Lv.${monster.level}`;
+    return monster.custom_name ?? (monster as any).display_name ?? `怪物 Lv.${monster.level}`;
   }
 
   private startRound(runtime: Runtime): void {

@@ -104,7 +104,7 @@ export class NarratorService {
         return (
           `你把舵转向${ctx.direction_text}，${round1(ctx.distance ?? 0)} 海里后，` +
           `海面${ctx.scenery ?? '只剩一层灰白的浪'}。` +
-          `这一程耗去 ${round1(ctx.hours ?? 0)} 个世界小时，${ctx.fuel_text ?? '燃料略有消耗'}。` +
+          `这一程耗去 ${round1(ctx.hours ?? 0)} 个世界小时，${String(ctx.fuel_text ?? '燃料略有消耗').replace(/。$/, '')}。` +
           `${ctx.boundary_text ?? ''}`
         );
       case 'drift':
