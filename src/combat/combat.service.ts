@@ -1,7 +1,7 @@
 import { Injectable, Logger, OnModuleDestroy } from '@nestjs/common';
 import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
-import { Repository } from 'typeorm';
+import { Not, Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
 import { Character, Ship } from '../database/entities/character.entities';
 import { Monster } from '../database/entities/island.entities';
@@ -100,6 +100,51 @@ export class CombatService implements OnModuleDestroy {
     return this.sessions.get(combatId) ?? null;
   }
 
+  private monstersInUse(): Set<string> {
+    const inUse = new Set<string>();
+    for (const runtime of this.sessions.values()) {
+      if (runtime.state !== 'active') continue;
+      for (const participant of runtime.participants) {
+        if (participant.side === 'monster' && participant.alive) inUse.add(participant.id);
+      }
+    }
+    return inUse;
+  }
+
+  /**
+   * 清理遗留战斗（M5 修复）：
+   * - 角色已不在战斗状态（掉线/离开/进程重起）的会话直接丢弃；
+   * - 没有任何活跃会话引用的 combat 怪物释放回 idle，避免整座岛永久卡死。
+   */
+  async recover(islandId?: string): Promise<{ sessions: number; released: number }> {
+    let sessions = 0;
+    for (const [id, runtime] of [...this.sessions.entries()]) {
+      if (islandId && runtime.islandId !== islandId) continue;
+      const character = await this.characters.get(runtime.characterId).catch(() => null);
+      if (character && character.status === 'in_combat' && runtime.state === 'active') continue;
+      if (runtime.timer) clearTimeout(runtime.timer);
+      runtime.state = 'finished';
+      this.sessions.delete(id);
+      this.byCharacter.delete(runtime.characterId);
+      sessions += 1;
+    }
+
+    const bound = this.monstersInUse();
+    const rows = await this.monsters.find({
+      where: islandId ? { island_id: islandId, state: 'combat' } : { state: 'combat' },
+    });
+    let released = 0;
+    for (const monster of rows) {
+      if (bound.has(monster.id)) continue;
+      // 上一场异常中断时可能停在 0 血，恢复成可再战状态
+      if (monster.hp <= 0) monster.hp = monster.max_hp;
+      monster.state = 'idle';
+      await this.monsters.save(monster);
+      released += 1;
+    }
+    return { sessions, released };
+  }
+
   /** 进入岛屿遇到活怪即开战（§4.2 战斗基础版） */
   async startCombat(params: {
     character: Character;
@@ -107,10 +152,19 @@ export class CombatService implements OnModuleDestroy {
     islandId: string;
     channelId: string;
     monsters: Monster[];
-  }): Promise<Runtime> {
-    const { character, ship, islandId, channelId, monsters } = params;
+  }): Promise<Runtime | null> {
+    const { character, ship, islandId, channelId } = params;
     const existing = this.activeFor(character.id);
     if (existing) return existing;
+
+    // 先释放上一场遗留：卡在 combat 的怪物回 idle，失效会话清掉
+    await this.recover(islandId);
+
+    const inUse = this.monstersInUse();
+    const fresh = (
+      await this.monsters.find({ where: { island_id: islandId, state: Not('dead') } })
+    ).filter((monster) => !inUse.has(monster.id) && monster.hp > 0);
+    if (fresh.length === 0) return null;
 
     const participants: Combatant[] = [
       {
@@ -126,7 +180,7 @@ export class CombatService implements OnModuleDestroy {
         refId: character.id,
         alive: character.hp > 0,
       },
-      ...monsters.map((m) => ({
+      ...fresh.map((m) => ({
         id: m.id,
         side: 'monster' as const,
         name: m.custom_name ?? this.monsterName(m),
@@ -161,7 +215,7 @@ export class CombatService implements OnModuleDestroy {
 
     character.status = 'in_combat';
     await this.characters.save(character);
-    for (const monster of monsters) {
+    for (const monster of fresh) {
       monster.state = 'combat';
       await this.monsters.save(monster);
     }
