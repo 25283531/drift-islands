@@ -66,7 +66,7 @@ function parseModels(raw: string, fallbackSmall: string[], fallbackLarge: string
 export class AiGatewayService {
   private readonly logger = new Logger(AiGatewayService.name);
   private readonly endpoints: Endpoint[];
-  private readonly timeoutMs = envInt('AI_TIMEOUT_MS', 20000);
+  private readonly timeoutMs = envInt('AI_TIMEOUT_MS', 8000);
 
   constructor() {
     this.endpoints = this.buildEndpoints();
@@ -174,7 +174,7 @@ export class AiGatewayService {
     if (candidates.length === 0) throw new AiUnavailableError('所有模型都在冷却中');
 
     let lastError: Error | null = null;
-    for (const endpoint of candidates.slice(0, 4)) {
+    for (const endpoint of candidates.slice(0, 3)) {
       const controller = new AbortController();
       const timer = setTimeout(() => controller.abort(), this.timeoutMs);
       endpoint.calls += 1;
