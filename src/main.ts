@@ -17,7 +17,7 @@ async function bootstrap(): Promise<void> {
   const port = Number.parseInt(process.env.PORT ?? '3000', 10);
   await app.listen(port, '0.0.0.0');
   const logger = new Logger('Bootstrap');
-  logger.log(`漂流岛屿 M2 已启动：http://0.0.0.0:${port}`);
+  logger.log(`漂流岛屿 M3 已启动：http://0.0.0.0:${port}`);
   logger.log(`世界时钟：${process.env.DB_TYPE === 'postgres' ? 'PostgreSQL' : 'SQLite'} · Redis: ${process.env.REDIS_URL ? 'on' : 'memory'}`);
 }
 

@@ -218,6 +218,10 @@
       if (data.island_id) $('encounter-box').classList.add('hidden');
     });
 
+    socket.on('command_action', (data) => {
+      if (data?.emit) socket.emit(data.emit, data.payload || {});
+    });
+
     socket.on('chat_history', (data) => {
       clearLog();
       (data.messages || []).forEach((m) => renderMessage(data.channel_id, m, 'visible'));
@@ -233,8 +237,8 @@
       state.combatDeadline = Date.now() + data.deadline_ms;
       renderParticipants(data.participants);
       startCombatTimer();
-      setCombatButtons(false);
-      logLine({ who: '战斗', text: `第 ${data.round} 回合开始，15 秒内提交行动。`, cls: 'combat' });
+      setCombatButtons(true);
+      logLine({ who: '战斗', text: `第 ${data.round} 回合开始，15 秒内提交行动。直接发「攻击」「防御」或「逃跑」也行。`, cls: 'combat' });
     });
 
     socket.on('combat_round_result', (data) => {
@@ -278,6 +282,54 @@
       if (data.base) toast(`基地：防御 ${data.base.defense_lv} · 储物 ${data.base.storage_lv} · 设施 ${data.base.facility_lv}`, 'warn');
     });
     socket.on('island_panel', (data) => renderPanel(data));
+
+    // ---------------- M3：团队 / PvP / 交易 / 技能 / 疲劳 / 保护期
+    socket.on('team_update', (d) => m3Render('队伍', d));
+    socket.on('team_boarded', (d) => {
+      m3Render('上船', d);
+      if (d.text) toast(d.text);
+    });
+    socket.on('team_invited', (d) => {
+      m3Render('邀请', d);
+      toast(`已邀请 ${d.target} 加入「${d.team}」`, 'warn');
+    });
+    socket.on('skills_update', (d) => m3Render('技能', d));
+    socket.on('trade_offered', (d) => m3Render('交易邀请', d));
+    socket.on('trade_list', (d) => m3Render('待处理交易', d));
+    socket.on('trade_result', (d) => {
+      m3Render('交易结果', d);
+      if (d.narration) logLine({ who: '交易', text: d.narration, cls: 'narration' });
+    });
+    socket.on('fatigue_update', (d) => {
+      m3Render('状态', d);
+      if (d.warning) toast(d.warning, 'warn');
+    });
+    socket.on('protection_update', (d) => m3Render('保护期', d));
+    socket.on('pvp_result', (d) => {
+      m3Render('决斗', d);
+      if (d.narration) logLine({ who: '战斗', text: d.narration, cls: 'narration' });
+    });
+    socket.on('base_attack_result', (d) => {
+      m3Render('攻击基地', d);
+      if (d.narration) logLine({ who: '战斗', text: d.narration, cls: 'narration' });
+    });
+    socket.on('capture_update', (d) => {
+      m3Render('占领', d);
+      if (d.narration) logLine({ who: '占领', text: d.narration, cls: 'narration' });
+    });
+    socket.on('dead_drop_placed', (d) => {
+      m3Render('藏匿点', d);
+      toast('东西已藏好，附近的人都能拿走', 'warn');
+    });
+    socket.on('dead_drop_result', (d) => {
+      m3Render('取出', d);
+      if (d.narration) toast(d.narration);
+    });
+    socket.on('monster_offer', (d) => m3Render('它的条件', d));
+    socket.on('monster_trade_result', (d) => {
+      m3Render('怪物交易', d);
+      if (d.narration) logLine({ who: '交易', text: d.narration, cls: 'narration' });
+    });
   }
 
   // ------------------------------------------------------------ M2 UI
@@ -494,8 +546,7 @@
     if (!state.combat) return;
     let target;
     if (action === 'attack') {
-      const list = $('combat-participants').querySelectorAll('li:not(.dead)');
-      target = state.combat.participants?.find?.((p) => p.side === 'monster')?.id;
+      target = state.combat.participants?.find?.((p) => p.side === 'monster' && (p.hp ?? 1) > 0)?.id;
     }
     state.socket.emit('combat_action', { combat_id: state.combat.combat_id, action, target_id: target });
     setCombatButtons(false);
@@ -592,6 +643,28 @@
     if (!islandId) return toast('先上岛再看面板', 'warn');
     state.socket.emit('island_panel', { island_id: islandId });
   };
+
+  // M3 入口
+  $('btn-team').onclick = () => {
+    const name = window.prompt('队伍名字（2–12 字）');
+    if (name) state.socket.emit('team_create', { name });
+  };
+  $('btn-team-info').onclick = () => state.socket.emit('team_info');
+  $('btn-skills').onclick = () => state.socket.emit('skills');
+  $('btn-fatigue').onclick = () => state.socket.emit('heartbeat');
+  $('btn-capture').onclick = () => {
+    const islandId = state.island?.id || state.character?.island_id;
+    if (!islandId) return toast('先在岛上', 'warn');
+    state.socket.emit('capture_status', { island_id: islandId });
+  };
+  $('btn-protection').onclick = () => state.socket.emit('protection_status');
+
+  function m3Render(title, data) {
+    const box = $('m3-content');
+    box.classList.remove('hidden');
+    box.innerHTML = `<h4>${title}</h4><pre></pre>`;
+    box.querySelector('pre').textContent = JSON.stringify(data, null, 2);
+  }
 
   // 有 token 时自动续登
   if (state.token) {

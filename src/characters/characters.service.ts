@@ -21,7 +21,7 @@ export class CharactersService {
     return { x: Math.cos(angle) * radius, y: Math.sin(angle) * radius };
   }
 
-  async create(userId: string, rawName: string): Promise<{ character: Character; ship: Ship }> {
+  async create(userId: string, rawName: string, protectionLevel = 0): Promise<{ character: Character; ship: Ship }> {
     const name = (rawName ?? '').trim();
     if (name.length < 2 || name.length > 12) throw new Error('角色名长度需为 2–12 个字符');
     if (/[<>/\s]/.test(name)) throw new Error('角色名不能包含空格或特殊符号');
@@ -55,6 +55,7 @@ export class CharactersService {
     );
 
     const aptitude = APTITUDES[Math.floor(Math.random() * APTITUDES.length)];
+    const safeProtection = Math.max(0, Math.min(10, Math.floor(Number(protectionLevel) || 0)));
     const character = await this.characters.save(
       this.characters.create({
         id: randomUUID(),
@@ -73,8 +74,8 @@ export class CharactersService {
         ship_id: ship.id,
         island_id: null,
         team_id: null,
-        protection_level: 0,
-        protection_active: false,
+        protection_level: safeProtection,
+        protection_active: safeProtection > 0,
         fatigue: 0,
         fatigued_world_days: 0,
         online_seconds_today: 0,
@@ -119,6 +120,13 @@ export class CharactersService {
 
   async save(character: Character): Promise<Character> {
     return this.characters.save(character);
+  }
+
+  /** 同船人数（用于按实际人数计算移动与物资消耗） */
+  async countCrew(shipId: string | null): Promise<number> {
+    if (!shipId) return 1;
+    const count = await this.characters.count({ where: { ship_id: shipId } });
+    return Math.max(1, count);
   }
 
   async saveShip(ship: Ship): Promise<Ship> {

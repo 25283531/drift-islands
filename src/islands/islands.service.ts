@@ -7,6 +7,7 @@ import { Character } from '../database/entities/character.entities';
 import { Island, Monster, MonsterKind } from '../database/entities/island.entities';
 import { ENCOUNTER_RANGE, PROTECTION } from '../game/constants';
 import { bearingDeg, bearingText, distanceNm, round1 } from '../game/geo';
+import { encounterAllowed } from '../game/m3';
 
 export interface EnterResult {
   island: Island;
@@ -124,8 +125,19 @@ export class IslandsService {
     }
 
     const channel = await this.ensureChannel(island);
-    const monsters = await this.aliveMonsters(island.id);
+    const allMonsters = await this.aliveMonsters(island.id);
     const warnings: { type: string; text: string }[] = [];
+
+    // 保护期内不偶遇高于自身 2 级以上的怪物（§3）；主动进岛仍可见提示
+    const protectionLevel = character.protection_active ? character.protection_level : 0;
+    const monsters = allMonsters.filter((monster) => encounterAllowed(character.level, protectionLevel, monster.level));
+    const hidden = allMonsters.length - monsters.length;
+    if (hidden > 0) {
+      warnings.push({
+        type: 'protection_filtered',
+        text: `保护期内，${hidden} 只过于强大的怪物没有惊动你。`,
+      });
+    }
 
     // 保护期内主动进入高等级岛屿：允许，但提示存在高于自身 4 级的怪物 / 人物（§4.1）
     const highest = monsters.reduce((max, m) => Math.max(max, m.level), 0);
@@ -133,6 +145,11 @@ export class IslandsService {
       warnings.push({
         type: 'high_level_island',
         text: `这座岛上有比你高 ${highest - character.level} 级的存在，超出了保护期的覆盖范围。`,
+      });
+    } else if (allMonsters.length > monsters.length) {
+      warnings.push({
+        type: 'high_level_island',
+        text: '岛深处还有你看不清的东西，最好不要往里走。',
       });
     }
 

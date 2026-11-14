@@ -32,7 +32,7 @@
         </div>
         <div id="log" class="log" aria-live="polite"></div>
         <form id="chat-form" class="chat-form">
-          <input id="chat-input" maxlength="200" placeholder="说点什么……（AI 只回应游戏相关问题）" autocomplete="off" />
+          <input id="chat-input" maxlength="200" placeholder="发「菜单」看操作；启航 / 漂流 / 附近 / 上岛 / 攻击 / 搜刮 / 造岛" autocomplete="off" />
           <button type="submit">发送</button>
         </form>
       </section>
@@ -97,6 +97,9 @@
           </div>
         </div>
 
+        <details id="info-drawer" class="info-drawer">
+          <summary>信息与面板（点开看数值，操作直接打字）</summary>
+
         <div id="m2-box" class="m2">
           <h3>岛屿与成长</h3>
           <div class="btn-row">
@@ -110,9 +113,24 @@
           <div id="m2-content" class="m2-content hidden"></div>
         </div>
 
+        <div id="m3-box" class="m2">
+          <h3>队伍与冲突</h3>
+          <div class="btn-row">
+            <button id="btn-team">组队</button>
+            <button id="btn-team-info">队伍</button>
+            <button id="btn-skills">技能</button>
+            <button id="btn-fatigue">状态</button>
+            <button id="btn-capture">夺岛</button>
+            <button id="btn-protection">保护期</button>
+          </div>
+          <div id="m3-content" class="m2-content hidden"></div>
+        </div>
+
+        </details>
+
         <div class="hint">
-          <p>十五秒一回合，超时自动防守。进岛即遭遇岛上的怪物。</p>
-          <p>夜间视野更小；顺洋流航行不耗燃料。</p>
+          <p>直接在聊天框输入：菜单、启航、漂流、附近、上岛、攻击、搜刮、造岛…</p>
+          <p>启航后按提示发方向与航程；造岛用一段话描述，缺什么系统会追问。</p>
         </div>
       </aside>
     </main>

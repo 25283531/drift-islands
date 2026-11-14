@@ -8,6 +8,7 @@ import { Island, IslandPoint, Monster, MonsterKind } from '../database/entities/
 import { Item } from '../database/entities/item.entities';
 import { WorldService } from '../world/world.service';
 import { ContentFilterService } from '../ai/content-filter.service';
+import { AiGatewayService } from '../ai/ai-gateway.service';
 import { ResourceRegistryService } from '../resources/resource-registry.service';
 import { CharactersService } from '../characters/characters.service';
 import { GAME } from '../game/constants';
@@ -21,6 +22,13 @@ import {
   validateDraft,
 } from '../game/m2';
 import { distanceNm, round1 } from '../game/geo';
+import {
+  applyMissingAnswer,
+  describeExtraction,
+  extractIslandDraft,
+  MissingField,
+  missingOf,
+} from '../game/island-text';
 
 export interface CreateIslandResult {
   island: Island;
@@ -91,6 +99,7 @@ const RESOURCE_LABEL: Record<string, string> = {
 export class IslandCreateService {
   private readonly logger = new Logger(IslandCreateService.name);
   private readonly sessions = new Map<string, DraftSession>();
+  private readonly textSessions = new Map<string, { draft: Partial<IslandDraft>; missing: MissingField[]; index: number; updatedAt: number }>();
 
   constructor(
     @InjectRepository(Island) private readonly islands: Repository<Island>,
@@ -103,6 +112,7 @@ export class IslandCreateService {
     private readonly filter: ContentFilterService,
     private readonly resources: ResourceRegistryService,
     private readonly characters: CharactersService,
+    private readonly ai: AiGatewayService,
   ) {}
 
   // ------------------------------------------------------------ 模板会话
@@ -130,6 +140,103 @@ export class IslandCreateService {
 
   cancel(characterId: string): void {
     this.sessions.delete(characterId);
+    this.textSessions.delete(characterId);
+  }
+
+  // ------------------------------------------------------------ 一段话造岛
+
+  /** 一段话 → 结构化草稿；只追问缺失项 */
+  async startFromText(character: Character, text: string) {
+    const extracted = extractIslandDraft(text);
+    const draft = await this.aiFill(text, extracted.draft);
+    const missing = missingOf(draft);
+    this.textSessions.set(character.id, { draft, missing, index: 0, updatedAt: Date.now() });
+    const head = describeExtraction({ ...extracted, draft });
+    const question = missing[0]?.question ?? null;
+    return {
+      draft,
+      missing,
+      complete: missing.length === 0,
+      question,
+      say: question ? `${head}\n${question}` : `${head}\n信息齐了，回复「确认」就造。`,
+    };
+  }
+
+  /** 回答一个缺失项，返回下一个问题或汇总 */
+  answerMissing(characterId: string, text: string) {
+    const session = this.textSessions.get(characterId);
+    if (!session) throw new Error('没有正在进行的造岛流程');
+    if (Date.now() - session.updatedAt > 30 * 60_000) {
+      this.textSessions.delete(characterId);
+      throw new Error('造岛流程已超时，重新说「造岛」');
+    }
+    const current = session.missing[session.index];
+    if (!current) return { complete: true, question: null, say: '信息齐了，回复「确认」就造。' };
+    applyMissingAnswer(session.draft, current.id, text);
+    session.index += 1;
+    session.updatedAt = Date.now();
+    const next = session.missing[session.index];
+    return {
+      complete: !next,
+      question: next?.question ?? null,
+      say: next ? next.question : '信息齐了，回复「确认」就造。',
+    };
+  }
+
+  textSession(characterId: string) {
+    return this.textSessions.get(characterId) ?? null;
+  }
+
+  async confirmText(character: Character): Promise<CreateIslandResult> {
+    const session = this.textSessions.get(character.id);
+    if (!session) throw new Error('没有正在进行的造岛流程');
+    if (session.missing.length > session.index) throw new Error('还有信息没补完');
+    const result = await this.create(character, session.draft);
+    this.textSessions.delete(character.id);
+    return result;
+  }
+
+  /** 模型补全规则抽不到的字段（失败不影响流程） */
+  private async aiFill(text: string, draft: Partial<IslandDraft>): Promise<Partial<IslandDraft>> {
+    if (draft.name && draft.description && (draft.rules?.length ?? 0) >= 3 && draft.resource_direction && draft.monsters?.[0]?.name) {
+      return draft;
+    }
+    const prompt = [
+      '把玩家对一座岛的描述整理成 JSON，只输出 JSON：',
+      '{"name":"","description":"","rules":[""],"resources":"","monster":"","count":0,"max_level":0}',
+      `描述：${text.slice(0, 1000)}`,
+    ].join('\n');
+    try {
+      const reply = await this.ai.call('island_extract', prompt, { tier: 'small', maxTokens: 300 });
+      const jsonText = /\{[\s\S]*\}/.exec(reply)?.[0];
+      if (!jsonText) return draft;
+      const parsed = JSON.parse(jsonText) as any;
+      if (!draft.name && typeof parsed.name === 'string' && parsed.name.trim()) draft.name = parsed.name.trim().slice(0, 16);
+      if (!draft.description && typeof parsed.description === 'string' && parsed.description.trim()) {
+        draft.description = parsed.description.trim().slice(0, 120);
+      }
+      if ((!draft.rules || draft.rules.length < 3) && Array.isArray(parsed.rules)) {
+        const rules = parsed.rules.map((rule: any) => String(rule).trim()).filter(Boolean).slice(0, 5);
+        if (rules.length >= 3) draft.rules = rules;
+      }
+      if (!draft.resource_direction && typeof parsed.resources === 'string' && parsed.resources.trim()) {
+        draft.resource_direction = parsed.resources.trim().slice(0, 60);
+      }
+      if (!draft.monsters?.[0]?.name && typeof parsed.monster === 'string' && parsed.monster.trim()) {
+        draft.monsters = [
+          {
+            name: parsed.monster.trim().slice(0, 12),
+            max_level: Math.max(0, Math.min(7, Number(parsed.max_level) || 1)),
+            count: Math.max(1, Math.min(12, Number(parsed.count) || 3)),
+            concentrated: false,
+          },
+        ];
+      }
+      return draft;
+    } catch (err) {
+      this.logger.debug(`造岛模型补充失败：${(err as Error).message}`);
+      return draft;
+    }
   }
 
   /** 回答当前问题，返回下一个问题（或 null 表示可以汇总） */

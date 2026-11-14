@@ -1,4 +1,5 @@
 import { BadRequestException, Injectable } from '@nestjs/common';
+import { EventEmitter2 } from '@nestjs/event-emitter';
 import { InjectRepository } from '@nestjs/typeorm';
 import { Repository } from 'typeorm';
 import { randomUUID } from 'crypto';
@@ -26,6 +27,7 @@ export class CrystalsService {
     @InjectRepository(Crystal) private readonly crystals: Repository<Crystal>,
     private readonly characters: CharactersService,
     private readonly world: WorldService,
+    private readonly events: EventEmitter2,
   ) {}
 
   /** 怪物死亡掉落晶核（等级 = 怪物等级，能量 = 100^(N-1)），直接由击杀者收起 */
@@ -78,6 +80,9 @@ export class CrystalsService {
       character.stamina = character.max_stamina;
     }
     await this.characters.save(character);
+    if (applied.level > levelBefore) {
+      this.events.emit('character.levelup', { character_id: character.id, level: applied.level, from: levelBefore });
+    }
 
     crystal.energy_remaining = Number((crystal.energy_remaining - gain).toFixed(6));
     if (crystal.energy_remaining <= 1e-9) {

@@ -18,9 +18,13 @@ export class CharactersController {
   }
 
   @Post('characters')
-  async create(@Req() req: any, @Body() body: { name?: string }) {
+  async create(@Req() req: any, @Body() body: { name?: string; protection_level?: number }) {
     try {
-      const { character, ship } = await this.characters.create(req.user.sub, body?.name ?? '');
+      const { character, ship } = await this.characters.create(
+        req.user.sub,
+        body?.name ?? '',
+        Number(body?.protection_level ?? 0),
+      );
       return { character, ship };
     } catch (err) {
       return { error: { code: 'CREATE_CHARACTER_FAILED', message: (err as Error).message } };

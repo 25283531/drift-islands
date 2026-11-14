@@ -8,10 +8,11 @@ import { MovementModule } from '../movement/movement.module';
 import { AiModule } from '../ai/ai.module';
 import { WorldModule } from '../world/world.module';
 import { M2Module } from '../m2/m2.module';
+import { M3Module } from '../m3/m3.module';
 import { GameGateway } from './game.gateway';
 
 @Module({
-  imports: [AuthModule, CharactersModule, ChatModule, CombatModule, IslandsModule, MovementModule, AiModule, WorldModule, M2Module],
+  imports: [AuthModule, CharactersModule, ChatModule, CombatModule, IslandsModule, MovementModule, AiModule, WorldModule, M2Module, M3Module],
   providers: [GameGateway],
   exports: [GameGateway],
 })

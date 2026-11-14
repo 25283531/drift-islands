@@ -23,9 +23,15 @@ import { CollectService } from '../collect/collect.service';
 import { CrystalsService } from '../crystals/crystals.service';
 import { GarrisonService } from '../garrison/garrison.service';
 import { ShipsService } from '../ships/ships.service';
+import { TeamService, TradeService } from '../m3/social.service';
+import { ConflictService } from '../m3/conflict.service';
+import { FatigueService, ProtectionService, SkillsService } from '../m3/growth.service';
+import { MonsterAiService } from '../m3/monster-ai.service';
 import { FIXED_IDS } from '../database/seed.service';
 import { GAME } from '../game/constants';
 import { envInt } from '../common/env';
+import { MENU_TEXT, parseDirection, parseDistance, parseIntent } from '../game/commands';
+import { bearingDeg, bearingText, round1 } from '../game/geo';
 interface SocketIdentity {
   userId: string;
   characterId: string;
@@ -38,6 +44,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
 
   private readonly sockets = new Map<string, Socket>();
   private readonly graceTimers = new Map<string, NodeJS.Timeout>();
+  private readonly commandStates = new Map<string, { mode: 'sail_direction' | 'sail_distance' | 'island_text' | 'island_fill' | 'confirm_island'; angle?: number }>();
 
   constructor(
     private readonly auth: AuthService,
@@ -53,6 +60,13 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     private readonly crystals: CrystalsService,
     private readonly garrison: GarrisonService,
     private readonly ships: ShipsService,
+    private readonly team: TeamService,
+    private readonly trade: TradeService,
+    private readonly conflict: ConflictService,
+    private readonly skills: SkillsService,
+    private readonly fatigue: FatigueService,
+    private readonly protection: ProtectionService,
+    private readonly monsterAi: MonsterAiService,
   ) {}
 
   handleConnection(client: Socket): void {
@@ -335,6 +349,9 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     if (!character) return this.emitError(client, 'NO_CHARACTER', '角色不存在');
 
     const channelId = body?.channel_id || FIXED_IDS.SEA_CHANNEL;
+    const text = (body?.text ?? '').trim();
+    if (text && (await this.handleTextCommand(client, character, text))) return;
+
     const result = await this.chat.send({
       characterId: character.id,
       userId: identity.userId,
@@ -610,6 +627,245 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
     client.disconnect(true);
   }
 
+  // ---------------------------------------------------------------- M3 团队 / PvP / 交易 / 技能 / 怪物
+
+  private async run<T>(client: Socket, code: string, work: () => Promise<T> | T, event: string, pick?: (value: T) => any) {
+    try {
+      const value = await work();
+      const payload = pick ? await pick(value) : value;
+      client.emit(event, payload);
+    } catch (err) {
+      this.emitError(client, code, (err as Error).message);
+    }
+  }
+
+  @SubscribeMessage('team_create')
+  async onTeamCreate(@ConnectedSocket() client: Socket, @MessageBody() body: { name?: string }) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(client, 'TEAM_FAILED', () => this.team.create(identity.characterId, body?.name ?? ''), 'team_update', () => this.team.info(identity.characterId));
+  }
+
+  @SubscribeMessage('team_invite')
+  async onTeamInvite(@ConnectedSocket() client: Socket, @MessageBody() body: { name?: string }) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(
+      client,
+      'TEAM_FAILED',
+      () => this.team.invite(identity.characterId, body?.name ?? ''),
+      'team_invited',
+      (value) => ({ target: value.target.name, team: value.team.name }),
+    );
+  }
+
+  @SubscribeMessage('team_join')
+  async onTeamJoin(@ConnectedSocket() client: Socket) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(client, 'TEAM_FAILED', () => this.team.join(identity.characterId), 'team_update', () => this.team.info(identity.characterId));
+  }
+
+  @SubscribeMessage('team_leave')
+  async onTeamLeave(@ConnectedSocket() client: Socket) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(client, 'TEAM_FAILED', () => this.team.leave(identity.characterId), 'team_update', () => this.team.info(identity.characterId));
+  }
+
+  @SubscribeMessage('team_disband')
+  async onTeamDisband(@ConnectedSocket() client: Socket) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(client, 'TEAM_FAILED', () => this.team.disband(identity.characterId), 'team_update', () => ({ in_team: false, team: null, members: [] }));
+  }
+
+  @SubscribeMessage('team_info')
+  async onTeamInfo(@ConnectedSocket() client: Socket) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(client, 'TEAM_FAILED', () => this.team.info(identity.characterId), 'team_update');
+  }
+
+  @SubscribeMessage('team_title')
+  async onTeamTitle(@ConnectedSocket() client: Socket, @MessageBody() body: { show?: boolean }) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(
+      client,
+      'TEAM_FAILED',
+      async () => {
+        const info = await this.team.info(identity.characterId);
+        if (!info.in_team || !info.team) throw new Error('你不在队伍中');
+        this.team.setTeamTitle(info.team.id, body?.show !== false);
+        return this.team.info(identity.characterId);
+      },
+      'team_update',
+    );
+  }
+
+  @SubscribeMessage('team_board')
+  async onTeamBoard(@ConnectedSocket() client: Socket) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(client, 'TEAM_FAILED', () => this.team.board(identity.characterId, ''), 'team_boarded', (value) => ({
+      ship_id: value.ship.id,
+      ship_name: value.ship.name,
+      crew: 1,
+      text: '你踩上队长的甲板，脚下晃了一下。',
+    }));
+  }
+
+  @SubscribeMessage('team_disembark')
+  async onTeamDisembark(@ConnectedSocket() client: Socket) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(client, 'TEAM_FAILED', () => this.team.disembark(identity.characterId), 'team_boarded', (value) => ({
+      ship_id: value.ship?.id ?? null,
+      ship_name: value.ship?.name ?? null,
+      text: '你回到自己的船上。',
+    }));
+  }
+
+  @SubscribeMessage('pvp_attack')
+  async onPvpAttack(@ConnectedSocket() client: Socket, @MessageBody() body: { name?: string }) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(client, 'PVP_FAILED', () => this.conflict.duel(identity.characterId, body?.name ?? ''), 'pvp_result');
+  }
+
+  @SubscribeMessage('attack_base')
+  async onAttackBase(@ConnectedSocket() client: Socket, @MessageBody() body: { island_id?: string }) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(client, 'PVP_FAILED', () => this.conflict.attackBase(identity.characterId, body?.island_id), 'base_attack_result');
+  }
+
+  @SubscribeMessage('capture_start')
+  async onCaptureStart(@ConnectedSocket() client: Socket, @MessageBody() body: { island_id?: string }) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(client, 'PVP_FAILED', () => this.conflict.startCapture(identity.characterId, body?.island_id), 'capture_update');
+  }
+
+  @SubscribeMessage('capture_status')
+  async onCaptureStatus(@ConnectedSocket() client: Socket, @MessageBody() body: { island_id?: string }) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(client, 'PVP_FAILED', () => this.conflict.captureStatus(identity.characterId, body?.island_id), 'capture_update');
+  }
+
+  @SubscribeMessage('capture_cancel')
+  async onCaptureCancel(@ConnectedSocket() client: Socket) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(client, 'PVP_FAILED', () => this.conflict.cancelCapture(identity.characterId), 'capture_update');
+  }
+
+  @SubscribeMessage('trade_propose')
+  async onTradePropose(
+    @ConnectedSocket() client: Socket,
+    @MessageBody() body: { name?: string; offer_ids?: string[]; want_ids?: string[] },
+  ) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(
+      client,
+      'TRADE_FAILED',
+      () => this.trade.propose(identity.characterId, body?.name ?? '', body?.offer_ids ?? [], body?.want_ids ?? []),
+      'trade_offered',
+    );
+  }
+
+  @SubscribeMessage('trade_accept')
+  async onTradeAccept(@ConnectedSocket() client: Socket, @MessageBody() body: { trade_id?: string }) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(client, 'TRADE_FAILED', () => this.trade.accept(identity.characterId, body?.trade_id ?? ''), 'trade_result');
+  }
+
+  @SubscribeMessage('trade_decline')
+  async onTradeDecline(@ConnectedSocket() client: Socket, @MessageBody() body: { trade_id?: string }) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(client, 'TRADE_FAILED', () => this.trade.decline(identity.characterId, body?.trade_id ?? ''), 'trade_result');
+  }
+
+  @SubscribeMessage('trade_list')
+  async onTradeList(@ConnectedSocket() client: Socket) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(client, 'TRADE_FAILED', () => this.trade.list(identity.characterId), 'trade_list');
+  }
+
+  @SubscribeMessage('dead_drop')
+  async onDeadDrop(@ConnectedSocket() client: Socket, @MessageBody() body: { item_ids?: string[] }) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(client, 'TRADE_FAILED', () => this.trade.placeDrop(identity.characterId, body?.item_ids ?? []), 'dead_drop_placed');
+  }
+
+  @SubscribeMessage('dead_drop_take')
+  async onDeadDropTake(@ConnectedSocket() client: Socket, @MessageBody() body: { drop_id?: string }) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(client, 'TRADE_FAILED', () => this.trade.takeDrop(identity.characterId, body?.drop_id ?? ''), 'dead_drop_result');
+  }
+
+  @SubscribeMessage('skills')
+  async onSkills(@ConnectedSocket() client: Socket) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(client, 'SKILL_FAILED', () => this.skills.list(identity.characterId), 'skills_update');
+  }
+
+  @SubscribeMessage('heartbeat')
+  async onHeartbeat(@ConnectedSocket() client: Socket) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(client, 'FATIGUE_FAILED', () => this.fatigue.touch(identity.characterId), 'fatigue_update');
+  }
+
+  @SubscribeMessage('protection_set')
+  async onProtectionSet(@ConnectedSocket() client: Socket, @MessageBody() body: { level?: number }) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(client, 'PROTECTION_FAILED', () => this.protection.setProtection(identity.characterId, Number(body?.level ?? 0)), 'protection_update');
+  }
+
+  @SubscribeMessage('protection_status')
+  async onProtectionStatus(@ConnectedSocket() client: Socket) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(
+      client,
+      'PROTECTION_FAILED',
+      async () => ({ ...(await this.protection.settle(identity.characterId)), ...(await this.protection.options()) }),
+      'protection_update',
+    );
+  }
+
+  @SubscribeMessage('monster_trade_offer')
+  async onMonsterTradeOffer(@ConnectedSocket() client: Socket, @MessageBody() body: { monster_id?: string }) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(client, 'MONSTER_FAILED', () => this.monsterAi.offerTrade(body?.monster_id ?? '', identity.characterId), 'monster_offer');
+  }
+
+  @SubscribeMessage('monster_trade_accept')
+  async onMonsterTradeAccept(@ConnectedSocket() client: Socket, @MessageBody() body: { offer_id?: string }) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(client, 'MONSTER_FAILED', () => this.monsterAi.acceptTrade(identity.characterId, body?.offer_id ?? ''), 'monster_trade_result');
+  }
+
+  @SubscribeMessage('monster_trade_list')
+  async onMonsterTradeList(@ConnectedSocket() client: Socket) {
+    const identity = this.identity(client);
+    if (!identity) return;
+    await this.run(client, 'MONSTER_FAILED', () => this.monsterAi.listOffers(identity.characterId), 'monster_offers');
+  }
+
   // ---------------------------------------------------------------- event bus
 
   @OnEvent('combat.round_start')
@@ -671,6 +927,227 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
       text: `世界进入第 ${payload.world_day} 日，洋流转向${Math.round(payload.current)}°。`,
       kind: 'world',
     });
+  }
+
+  // ---------------------------------------------------------------- 文字指令
+
+  /** 返回 true 表示已当作指令处理，不再进入聊天广播 */
+  private async handleTextCommand(client: Socket, character: any, text: string): Promise<boolean> {
+    const intent = parseIntent(text);
+    const state = this.commandStates.get(character.id);
+    // 问句（“附近有岛吗？”）优先当作正常聊天，让 AI 回答
+    if (!state && /[?？]\s*$/.test(text)) return false;
+    const islandChannel = character.island_id ? await this.islands.channelOf(character.island_id) : null;
+    const channelId = islandChannel?.id ?? FIXED_IDS.SEA_CHANNEL;
+    const say = (message: string) => {
+      client.emit('narration', { channel_id: channelId, text: message, kind: 'command' });
+      client.emit('command_reply', { text: message });
+    };
+
+    if (intent === 'cancel') {
+      this.commandStates.delete(character.id);
+      this.islandCreate.cancel(character.id);
+      say('好，先不做了。发「菜单」看看还能做什么。');
+      return true;
+    }
+
+    // —— 启航追问：方向 → 航程
+    if (state?.mode === 'sail_direction') {
+      const angle = parseDirection(text);
+      if (angle === null) {
+        say('这个方向我没看懂。发 0–359 的数字，或者「东北」「西南」这样的词。');
+        return true;
+      }
+      state.mode = 'sail_distance';
+      state.angle = angle;
+      say(`朝 ${Math.round(angle)}°。航程多少海里？（直接发数字，1–30）`);
+      return true;
+    }
+    if (state?.mode === 'sail_distance') {
+      const distance = parseDistance(text);
+      if (distance === null) {
+        say('航程需要一个数字，比如 5。');
+        return true;
+      }
+      this.commandStates.delete(character.id);
+      const result = await this.movement.move(character.id, state.angle ?? 0, distance);
+      if (result.refused) {
+        say(result.refused);
+        return true;
+      }
+      await this.afterTravel(client, result);
+      say(`航行了 ${round1(result.distance)} 海里，天又过了一截。`);
+      return true;
+    }
+
+    // —— 造岛：一段话 → 缺口追问 → 确认
+    if (state?.mode === 'island_text') {
+      try {
+        const started = await this.islandCreate.startFromText(character, text);
+        say(started.say);
+        this.commandStates.set(character.id, { mode: started.complete ? 'confirm_island' : 'island_fill' });
+      } catch (err) {
+        say(`这段话没整理出来：${(err as Error).message}`);
+      }
+      return true;
+    }
+    if (state?.mode === 'island_fill') {
+      try {
+        const answered = this.islandCreate.answerMissing(character.id, text);
+        say(answered.say);
+        if (answered.complete) this.commandStates.set(character.id, { mode: 'confirm_island' });
+      } catch (err) {
+        say((err as Error).message);
+      }
+      return true;
+    }
+
+    if (intent === 'menu' || intent === 'unknown') {
+      if (intent === 'unknown') return false;
+      say(MENU_TEXT);
+      return true;
+    }
+
+    switch (intent) {
+      case 'sail': {
+        if (character.island_id) return say('你还在岛上，先发「离岛」。'), true;
+        this.commandStates.set(character.id, { mode: 'sail_direction' });
+        say('往哪个方向？发 0–359 的数字，或「东北」「西南」这样的词。');
+        return true;
+      }
+      case 'drift': {
+        try {
+          const result = await this.movement.drift(character.id);
+          if (result.refused) say(result.refused);
+          else {
+            await this.afterTravel(client, result);
+            say('你松开舵，让洋流带着船走。');
+          }
+        } catch (err) {
+          say((err as Error).message);
+        }
+        return true;
+      }
+      case 'nearby': {
+        const nearest = await this.islands.nearest(character.x, character.y);
+        const state2 = await this.world.getState();
+        if (!nearest) {
+          say(`四周只有水。当前海域半径 ${round1(state2.sea_radius_nm)} 海里。`);
+          return true;
+        }
+        const direction = bearingText(bearingDeg(character.x, character.y, nearest.island.x, nearest.island.y));
+        const range = nearest.island.radius;
+        say(
+          `最近的岛在${direction}方向，约 ${round1(nearest.distance)} 海里（影响半径 ${range} 海里）。` +
+            (nearest.distance <= range ? '已经够近了，发「上岛」就能靠岸。' : '还得再靠近一些。'),
+        );
+        return true;
+      }
+      case 'enter': {
+        if (character.island_id) return say('你已经在岛上了。'), true;
+        const nearest = await this.islands.nearest(character.x, character.y);
+        if (!nearest || nearest.distance > nearest.island.radius) {
+          return say('附近没有够近的岛。先发「启航」或「漂流」靠近。'), true;
+        }
+        client.emit('command_action', { emit: 'enter_island', payload: { island_id: nearest.island.id } });
+        say(`你朝${nearest.island.name}的岸边靠过去。`);
+        return true;
+      }
+      case 'leave': {
+        if (!character.island_id) return say('你本来就在海上。'), true;
+        client.emit('command_action', { emit: 'leave_island', payload: {} });
+        say('你转身走向船，脚下从沙地变回甲板。');
+        return true;
+      }
+      case 'attack':
+      case 'defend':
+      case 'flee': {
+        const runtime = this.combat.activeFor(character.id);
+        if (!runtime) return say('现在没有战斗。上岛遇到活物才会打起来。'), true;
+        const target = runtime.participants.find((p: any) => p.side === 'monster' && p.hp > 0);
+        const result = await this.combat.submitAction(runtime.id, character.id, {
+          action: intent === 'attack' ? 'attack' : intent === 'defend' ? 'defend' : 'flee',
+          target_id: target?.id,
+        } as any);
+        say(result.ok ? '动作已提交，等这一回合结算。' : result.message ?? '这个动作现在做不了。');
+        return true;
+      }
+      case 'collect': {
+        if (!character.island_id) return say('你不在岛上，没什么可搜的。'), true;
+        try {
+          const result = await this.collectService.collect(character, character.island_id, text);
+          say(`${result.narration}（成功率 ${Math.round(result.chance * 100)}%，掷出 ${(result.roll * 100).toFixed(0)}）`);
+          this.emitCharacterUpdate(character.id);
+        } catch (err) {
+          say((err as Error).message);
+        }
+        return true;
+      }
+      case 'skills': {
+        try {
+          const list = await this.skills.list(character.id);
+          if (!list.skills.length) say(`你还没有领悟技能。资质：${list.aptitude}，到 1/3/5/7 级会自然领悟。`);
+          else say(`已领悟：\n${list.skills.map((s: any) => `· ${s.name}（${s.level_unlocked} 级）：${s.description}`).join('\n')}`);
+        } catch (err) {
+          say((err as Error).message);
+        }
+        return true;
+      }
+      case 'team': {
+        const name = text.replace(/^(组队|建队|创建队伍)\s*/, '').trim();
+        if (!name) return say('给队伍起个名字，发送：建队 碎浪'), true;
+        try {
+          await this.team.create(character.id, name);
+          say(`队伍「${name}」建好了。让队友发「队伍」，我再教他怎么加入。`);
+        } catch (err) {
+          say((err as Error).message);
+        }
+        return true;
+      }
+      case 'team_info': {
+        try {
+          const info = await this.team.info(character.id);
+          if (!info.in_team) say('你还没有队伍。发送「建队 队名」创建一个。');
+          else say(`队伍「${info.team?.name}」，共 ${info.members.length} 人：${info.members.map((m: any) => `${m.name}（Lv.${m.level}）`).join('、')}`);
+        } catch (err) {
+          say((err as Error).message);
+        }
+        return true;
+      }
+      case 'trade': {
+        say('面对面才能交易：先和对方站到同一座岛或 1 海里内，再说「和他换东西」，我会问你要换什么。');
+        return true;
+      }
+      case 'island_create': {
+        this.commandStates.set(character.id, { mode: 'island_text' });
+        say('用一段话把岛说清楚：叫什么、什么样子、有什么规矩、产什么、有什么怪物、几只、最高几级。想到多少说多少，缺的我再问。');
+        return true;
+      }
+      case 'confirm': {
+        try {
+          const result = await this.islandCreate.confirmText(character);
+          this.commandStates.delete(character.id);
+          client.emit('island_created', { island_id: result.island.id, name: result.island.name, summary: result.summary });
+          say(`岛造好了：${result.island.name}。位置不会告诉你，得自己找。`);
+        } catch (err) {
+          say((err as Error).message);
+        }
+        return true;
+      }
+      case 'status': {
+        const ship = await this.characters.getShip(character.ship_id);
+        const lines = [
+          `${character.name}｜Lv.${character.level}｜${character.aptitude}`,
+          `生命 ${character.hp}/${character.max_hp}｜疲劳 ${character.fatigue}｜保护期 ${character.protection_active ? `生效（到 ${character.protection_level} 级）` : '已结束'}`,
+          ship ? `船：${ship.name}｜燃料 ${round1(ship.fuel)}｜耐久 ${ship.hp}/${ship.max_hp}` : '没有船',
+          `位置：${character.island_id ? '岛上' : `${round1(character.x)}, ${round1(character.y)}`}`,
+        ];
+        say(lines.join('\n'));
+        return true;
+      }
+      default:
+        return false;
+    }
   }
 
   // ---------------------------------------------------------------- helpers

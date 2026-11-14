@@ -9,6 +9,7 @@ import { KvService } from '../redis/kv.service';
 import { GAME } from '../game/constants';
 import { bearingDeg, bearingText, distanceNm, normalizeAngle, round1 } from '../game/geo';
 import { planMove } from './movement.plan';
+import { crewFuelMultiplier } from '../game/m3';
 
 export interface TravelResult {
   character: Character;
@@ -138,6 +139,13 @@ export class MovementService {
   ): Promise<TravelResult> {
     const from = { x: character.x, y: character.y };
     const warnings = [...plan.warnings];
+
+    // 消耗按船上实际人数计算（§3）：同船的人一起分担，但油耗按人头叠加
+    const crew = mode === 'sail' ? await this.characters.countCrew(ship.id) : 1;
+    if (mode === 'sail' && crew > 1) {
+      plan.fuelUsed = Math.min(ship.fuel, round1(plan.fuelUsed * crewFuelMultiplier(crew)));
+      warnings.push({ type: 'crew', text: `船上共 ${crew} 人，燃料按人数计算。` });
+    }
 
     character.x = plan.x;
     character.y = plan.y;
