@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+﻿import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { mkdirSync } from 'fs';
@@ -11,6 +11,7 @@ import { Crystal, DeadDrop, Item } from './entities/item.entities';
 import { Channel, ChatMessage, ModerationRecord } from './entities/chat.entities';
 import { AiQuota, ModelPool, ResourceRegistry, WorldEvent, WorldState } from './entities/world.entities';
 import { CombatSession } from './entities/combat.entity';
+import { CreatorReward, IslandRating, Report } from './entities/m4.entities';
 import { SeedService } from './seed.service';
 
 export const ALL_ENTITIES = [
@@ -36,6 +37,9 @@ export const ALL_ENTITIES = [
   ModelPool,
   AiQuota,
   CombatSession,
+  IslandRating,
+  CreatorReward,
+  Report,
 ];
 
 function buildOptions() {
@@ -74,3 +78,4 @@ function buildOptions() {
   exports: [SeedService, TypeOrmModule],
 })
 export class DatabaseModule {}
+

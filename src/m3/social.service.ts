@@ -1,4 +1,4 @@
-import { Injectable, Logger } from '@nestjs/common';
+﻿import { Injectable, Logger } from '@nestjs/common';
 import { InjectRepository } from '@nestjs/typeorm';
 import { randomUUID } from 'crypto';
 import { In, Repository } from 'typeorm';
@@ -7,7 +7,7 @@ import { DeadDrop, Item } from '../database/entities/item.entities';
 import { CharactersService } from '../characters/characters.service';
 import { WorldService } from '../world/world.service';
 import { distanceNm, round1 } from '../game/geo';
-import { displayNameWithTeam } from '../game/m3';
+import { canTradeAt, displayNameWithTeam } from '../game/m3';
 
 const TRADE_TTL_MS = 5 * 60 * 1000;
 
@@ -252,7 +252,7 @@ export class TradeService {
     if (!to) throw new Error('找不到这个角色');
     if (to.id === from.id) throw new Error('不能和自己交易');
     if (to.status === 'dead') throw new Error('对方已经死了');
-    if (!this.near(from, to)) throw new Error('必须面对面才能交易（同岛或 1 海里内）');
+    if (!canTradeAt(from, to)) throw new Error('你们不在同一座岛，也不是同在海上，交易做不了');
 
     const offer = await this.owned(from.id, offerIds);
     const want = await this.owned(to.id, wantIds);
@@ -285,9 +285,9 @@ export class TradeService {
     if (trade.toId !== characterId) throw new Error('这笔交易不是给你的');
     const from = await this.must(trade.fromId);
     const to = await this.must(trade.toId);
-    if (!this.near(from, to)) {
+    if (!canTradeAt(from, to)) {
       this.pending.delete(tradeId);
-      throw new Error('距离太远，交易取消');
+      throw new Error('你们已经不在同一处，交易取消');
     }
 
     const offer = await this.owned(from.id, trade.offerIds);
@@ -433,12 +433,6 @@ export class TradeService {
     return rows.map((row) => `${row.name}×${row.quantity}`);
   }
 
-  private near(a: Character, b: Character): boolean {
-    if (a.island_id && a.island_id === b.island_id) return true;
-    if (a.island_id || b.island_id) return false;
-    return distanceNm(a.x, a.y, b.x, b.y) <= 1;
-  }
-
   private async owned(characterId: string, ids: string[]): Promise<Item[]> {
     const clean = [...new Set((ids ?? []).filter((id) => typeof id === 'string' && id.length > 0))];
     if (clean.length === 0) return [];
@@ -451,3 +445,4 @@ export class TradeService {
     return character;
   }
 }
+

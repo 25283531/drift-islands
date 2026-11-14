@@ -24,6 +24,8 @@ import { Character } from '../database/entities/character.entities';
 import { Island } from '../database/entities/island.entities';
 import { envStr } from '../common/env';
 import { ModelPoolService } from './model-pool.service';
+import { IncentiveService } from '../m4/incentive.service';
+import { ReportService } from '../m4/report.service';
 
 /** GM 令牌校验：请求头 x-admin-token 与 ADMIN_TOKEN 一致 */
 @Injectable()
@@ -46,6 +48,8 @@ export class AdminController {
     @InjectRepository(Character) private readonly characters: Repository<Character>,
     @InjectRepository(Island) private readonly islands: Repository<Island>,
     private readonly pool: ModelPoolService,
+    private readonly reports: ReportService,
+    private readonly incentives: IncentiveService,
   ) {}
 
   @Get('overview')
@@ -57,7 +61,7 @@ export class AdminController {
       this.events.count(),
       this.moderation.count({ where: { reviewed_at: null as any } }),
     ]);
-    return { characters, islands, online, events, pending_reviews: pending };
+    return { characters, islands, online, events, pending_reviews: pending, pending_reports: await this.reports.pendingCount() };
   }
 
   @Get('world-events')
@@ -123,5 +127,26 @@ export class AdminController {
     record.reviewed_by = body?.reviewed_by ?? 'gm';
     record.reviewed_at = new Date();
     return this.moderation.save(record);
+  }
+
+  @Get('reports')
+  async listReports(@Query('status') status?: string) {
+    return this.reports.list(status);
+  }
+
+  @Post('reports/:id/resolve')
+  async resolveReport(@Param('id') id: string, @Body() body: { action?: string; actor?: string }) {
+    return this.reports.resolve(id, body?.action ?? '', body?.actor ?? 'gm');
+  }
+
+  @Get('rewards')
+  async listRewards(@Query('limit') limit?: string) {
+    const n = Number(limit ?? 100);
+    return this.incentives.list(Number.isFinite(n) ? n : 100);
+  }
+
+  @Post('rewards/settle')
+  async settleRewards(@Body() body: { period_day?: number; actor?: string }) {
+    return this.incentives.settle(body?.period_day, body?.actor ?? 'gm');
   }
 }

@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+﻿import { Module } from '@nestjs/common';
 import { TypeOrmModule } from '@nestjs/typeorm';
 import { Character, ExperienceLog, Ship, Skill, Team } from '../database/entities/character.entities';
 import { Island, Monster } from '../database/entities/island.entities';
@@ -6,6 +6,7 @@ import { Crystal, DeadDrop, Item } from '../database/entities/item.entities';
 import { ModerationRecord } from '../database/entities/chat.entities';
 import { ModelPool, WorldEvent } from '../database/entities/world.entities';
 import { AiModule } from '../ai/ai.module';
+import { M4Module } from '../m4/m4.module';
 import { CharactersModule } from '../characters/characters.module';
 import { WorldModule } from '../world/world.module';
 import { AdminController } from './admin.controller';
@@ -36,6 +37,7 @@ import { TeamService, TradeService } from './social.service';
     CharactersModule,
     WorldModule,
     AiModule,
+    M4Module,
   ],
   controllers: [AdminController],
   providers: [
@@ -51,3 +53,4 @@ import { TeamService, TradeService } from './social.service';
   exports: [TeamService, TradeService, ConflictService, SkillsService, FatigueService, ProtectionService, MonsterAiService, ModelPoolService],
 })
 export class M3Module {}
+

@@ -1,6 +1,7 @@
-import { describe, expect, it } from 'vitest';
+﻿import { describe, expect, it } from 'vitest';
 import {
   CAPTURE_MINUTES,
+  canTradeAt,
   captureComplete,
   captureProgress,
   crewFuelMultiplier,
@@ -107,3 +108,16 @@ describe('M3 怪物智慧', () => {
     expect(monsterActions(7, 1)).toContain('trap');
   });
 });
+
+
+  describe('交易地点', () => {
+    it('同岛可成交，不同岛不行', () => {
+      expect(canTradeAt({ island_id: 'a' }, { island_id: 'a' })).toBe(true);
+      expect(canTradeAt({ island_id: 'a' }, { island_id: 'b' })).toBe(false);
+    });
+    it('同在海上可成交，一岛一海不行', () => {
+      expect(canTradeAt({ island_id: null }, { island_id: null })).toBe(true);
+      expect(canTradeAt({ island_id: 'a' }, { island_id: null })).toBe(false);
+    });
+  });
+

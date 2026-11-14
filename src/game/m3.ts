@@ -84,6 +84,15 @@ export function crewFuelMultiplier(crewCount: number): number {
   return Math.max(1, Math.min(8, Math.floor(crewCount)));
 }
 
+/** 交易地点规则：同岛可交易；两人都在海上也可交易；一岛一海不可 */
+export function canTradeAt(
+  a: { island_id?: string | null },
+  b: { island_id?: string | null },
+): boolean {
+  if (a.island_id && b.island_id) return a.island_id === b.island_id;
+  return !a.island_id && !b.island_id;
+}
+
 /** 团队称号：置于名字前 */
 export function displayNameWithTeam(name: string, teamName: string | null, showTitle: boolean): string {
   if (!showTitle || !teamName) return name;

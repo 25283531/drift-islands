@@ -34,10 +34,11 @@ describe('对话式交易 / 驻扎 / 漂流保底（e2e）', () => {
     await authSocket(socketB, b.token, characterB.id);
 
     const ds = harness.app.get(DataSource);
+    // 回归：两人都在海上但相距 28 海里，同海即可交易，不再卡“必须面对面”
     await ds.getRepository(Character).update({ id: characterA.id }, { x: 0, y: 0, island_id: null });
-    await ds.getRepository(Character).update({ id: characterB.id }, { x: 0, y: 0, island_id: null });
+    await ds.getRepository(Character).update({ id: characterB.id }, { x: 20, y: 20, island_id: null });
     await ds.getRepository(Ship).update({ id: characterA.ship_id }, { x: 0, y: 0 });
-    await ds.getRepository(Ship).update({ id: characterB.ship_id }, { x: 0, y: 0 });
+    await ds.getRepository(Ship).update({ id: characterB.ship_id }, { x: 20, y: 20 });
 
     const items = ds.getRepository(Item);
     await items.save(

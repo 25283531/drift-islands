@@ -1,4 +1,4 @@
-import { Module } from '@nestjs/common';
+﻿import { Module } from '@nestjs/common';
 import { ConfigModule } from '@nestjs/config';
 import { EventEmitterModule } from '@nestjs/event-emitter';
 import { AppController } from './app.controller';
@@ -15,6 +15,7 @@ import { ChatModule } from './chat/chat.module';
 import { GameModule } from './game/game.module';
 import { M2Module } from './m2/m2.module';
 import { M3Module } from './m3/m3.module';
+import { M4Module } from './m4/m4.module';
 
 @Module({
   imports: [
@@ -33,7 +34,9 @@ import { M3Module } from './m3/m3.module';
     GameModule,
     M2Module,
     M3Module,
+    M4Module,
   ],
   controllers: [AppController],
 })
 export class AppModule {}
+

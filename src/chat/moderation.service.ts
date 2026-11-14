@@ -102,4 +102,35 @@ export class ModerationService {
   async listRecords(limit = 100): Promise<ModerationRecord[]> {
     return this.records.find({ order: { created_at: 'DESC' }, take: limit });
   }
+
+  /** 人工复核后的处置（举报闭环）：提示 / 禁言 1 世界日 / 封禁 */
+  async applyManual(userId: string, action: 'warn' | 'mute' | 'ban', actor = 'gm'): Promise<{ action: string; status: string }> {
+    const user = await this.users.findOne({ where: { id: userId } });
+    if (!user) throw new Error('被举报账号不存在');
+
+    if (action === 'mute') {
+      user.status = 'muted';
+      await this.users.save(user);
+      await this.kv.set(`mute:${userId}`, '1', this.muteSeconds);
+    } else if (action === 'ban') {
+      user.status = 'banned';
+      await this.users.save(user);
+    }
+
+    await this.records.save(
+      this.records.create({
+        id: randomUUID(),
+        user_id: userId,
+        character_id: null,
+        channel_id: null as any,
+        message_id: null,
+        category: 'manual' as any,
+        action,
+        created_at: new Date(),
+        reviewed_by: actor,
+        reviewed_at: new Date(),
+      }),
+    );
+    return { action, status: user.status };
+  }
 }

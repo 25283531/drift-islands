@@ -148,7 +148,6 @@ export class ChatService {
     if (classification.boundary === 'dangerous') {
       return '现实中的制作方法不在游戏的回应范围里，这个话题我不接。';
     }
-    if (!classification.gameRelated) return undefined;
     if (!/[?？]|^\/|怎么|如何|为什么|哪里|在哪|什么/.test(text)) return undefined;
 
     const hint = this.templateHint(text);

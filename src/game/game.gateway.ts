@@ -1309,7 +1309,7 @@ export class GameGateway implements OnGatewayConnection, OnGatewayDisconnect {
         const items = await this.trade.itemsOf(character.id);
         this.commandStates.set(character.id, { mode: 'trade_target' });
         say(
-          '面对面才能交易。和谁换？发对方的角色名。' +
+          '和谁换？发对方的角色名（同岛或同在海上都行）。' +
             (items.length ? '' : '（你身上没有东西，可能换不了什么）'),
         );
         return true;
