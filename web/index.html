@@ -1,0 +1,129 @@
+<!doctype html>
+<html lang="zh-CN">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>漂流岛屿 · M1</title>
+  <link rel="stylesheet" href="/style.css" />
+</head>
+<body>
+  <div id="app">
+    <header class="topbar">
+      <div class="brand">
+        <span class="brand-mark">◈</span>
+        <div>
+          <h1>漂流岛屿</h1>
+          <p class="sub">末世海面 · 纯文字原型 M1</p>
+        </div>
+      </div>
+      <div class="statusline">
+        <span id="world-time">世界日 — · --:--</span>
+        <span id="position">坐标 —</span>
+        <span id="channel-name">公共海频道</span>
+        <span id="conn" class="dot off">未连接</span>
+      </div>
+    </header>
+
+    <main class="layout">
+      <section class="panel chat-panel">
+        <div class="panel-head">
+          <h2>频道</h2>
+          <span id="channel-tabs" class="tabs"></span>
+        </div>
+        <div id="log" class="log" aria-live="polite"></div>
+        <form id="chat-form" class="chat-form">
+          <input id="chat-input" maxlength="200" placeholder="说点什么……（AI 只回应游戏相关问题）" autocomplete="off" />
+          <button type="submit">发送</button>
+        </form>
+      </section>
+
+      <aside class="panel side-panel">
+        <div class="panel-head"><h2>航海</h2><span id="daynight" class="chip">白天</span></div>
+
+        <div class="gauges">
+          <div class="gauge"><label>船体</label><div class="bar"><i id="bar-hp"></i></div><span id="hp-text">—</span></div>
+          <div class="gauge"><label>燃料</label><div class="bar fuel"><i id="bar-fuel"></i></div><span id="fuel-text">—</span></div>
+        </div>
+
+        <div class="control-block">
+          <label class="field">
+            <span>方向角 0–360°</span>
+            <input id="angle" type="range" min="0" max="360" value="90" step="1" />
+            <b id="angle-val">90°</b>
+          </label>
+          <label class="field">
+            <span>航程（海里）</span>
+            <input id="distance" type="range" min="1" max="20" value="10" step="1" />
+            <b id="distance-val">10</b>
+          </label>
+          <div class="btn-row">
+            <button id="btn-move" class="primary">启航</button>
+            <button id="btn-drift">随机漂流</button>
+            <button id="btn-nearby">查看附近</button>
+          </div>
+        </div>
+
+        <div id="encounter-box" class="encounter hidden">
+          <div class="encounter-info">
+            <strong id="encounter-name">—</strong>
+            <p id="encounter-meta">—</p>
+          </div>
+          <button id="btn-enter" class="primary">进岛</button>
+        </div>
+
+        <div id="island-box" class="encounter hidden">
+          <div class="encounter-info">
+            <strong>已在岛上</strong>
+            <p id="island-meta">—</p>
+          </div>
+          <button id="btn-leave">离岛</button>
+        </div>
+
+        <div id="nearby-box" class="nearby hidden">
+          <h3>附近岛屿</h3>
+          <ul id="nearby-list"></ul>
+        </div>
+
+        <div id="combat-box" class="combat hidden">
+          <div class="combat-head">
+            <h3>战斗 · 第 <span id="combat-round">1</span> 回合</h3>
+            <span id="combat-timer" class="timer">15s</span>
+          </div>
+          <ul id="combat-participants" class="participants"></ul>
+          <div class="btn-row combat-actions">
+            <button id="btn-attack" class="danger">攻击</button>
+            <button id="btn-defend">防守</button>
+            <button id="btn-flee">逃跑</button>
+          </div>
+        </div>
+
+        <div class="hint">
+          <p>十五秒一回合，超时自动防守。进岛即遭遇岛上的怪物。</p>
+          <p>夜间视野更小；顺洋流航行不耗燃料。</p>
+        </div>
+      </aside>
+    </main>
+  </div>
+
+  <div id="toasts" class="toasts"></div>
+
+  <div id="auth-modal" class="modal">
+    <div class="modal-card">
+      <h2>登船</h2>
+      <p class="muted">M1 原型：用显示名换取会话，无密码。</p>
+      <label class="field"><span>显示名（2–16 字）</span><input id="login-name" maxlength="16" placeholder="例如：阿海" /></label>
+      <button id="btn-login" class="primary wide">登录 / 注册</button>
+      <div id="char-step" class="hidden">
+        <hr />
+        <p class="muted">还没有角色，起个名字：</p>
+        <label class="field"><span>角色名（2–12 字）</span><input id="char-name" maxlength="12" placeholder="例如：老陈" /></label>
+        <button id="btn-create" class="primary wide">创建角色并登船</button>
+      </div>
+      <p id="auth-error" class="error"></p>
+    </div>
+  </div>
+
+  <script src="/socket.io/socket.io.js"></script>
+  <script src="/app.js"></script>
+</body>
+</html>

@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+  workflow_dispatch:
+
+jobs:
+  test:
+    name: 构建与测试
+    runs-on: ubuntu-latest
+    timeout-minutes: 15
+    steps:
+      - name: 检出代码
+        uses: actions/checkout@v4
+
+      - name: 安装 Node 22
+        uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+
+      - name: 安装依赖
+        run: npm ci --no-audit --no-fund
+
+      - name: TypeScript 编译
+        run: npm run build
+
+      - name: 单元测试（裁决 / 数值 / 世界时钟 / 红线 / 配额）
+        run: npm run test:unit
+
+      - name: 端到端测试（注册 → 建角 → 移动 → 遭遇 → 进岛 → 战斗 → 隔离）
+        run: npm run test:e2e

@@ -1,0 +1,79 @@
+services:
+  db:
+    image: postgres:17-alpine
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: drift_islands
+      POSTGRES_USER: drift
+      POSTGRES_PASSWORD: ${DB_PASSWORD}
+    command:
+      - postgres
+      - -c
+      - shared_buffers=64MB
+      - -c
+      - max_connections=40
+      - -c
+      - work_mem=2MB
+      - -c
+      - maintenance_work_mem=32MB
+    volumes:
+      - db_data:/var/lib/postgresql/data
+      # 首次启动自动执行建表与索引（§1、§1.23）
+      - ./migrations:/docker-entrypoint-initdb.d:ro
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U drift -d drift_islands"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    mem_limit: 320m
+
+  redis:
+    image: redis:7-alpine
+    restart: unless-stopped
+    command: ["redis-server", "--maxmemory", "48mb", "--maxmemory-policy", "allkeys-lru", "--save", ""]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    mem_limit: 64m
+
+  app:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    restart: unless-stopped
+    depends_on:
+      db:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    environment:
+      PORT: 3000
+      DB_TYPE: postgres
+      DATABASE_URL: postgres://drift:${DB_PASSWORD}@db:5432/drift_islands
+      REDIS_URL: redis://redis:6379
+      JWT_SECRET: ${JWT_SECRET}
+      AI_BASE_URL: ${AI_BASE_URL:-}
+      AI_API_KEY: ${AI_API_KEY:-}
+      AI_MODEL_SMALL: ${AI_MODEL_SMALL:-}
+      AI_MODEL_LARGE: ${AI_MODEL_LARGE:-}
+      AI_DAILY_BUDGET: ${AI_DAILY_BUDGET:-200}
+      COMBAT_ROUND_MS: ${COMBAT_ROUND_MS:-15000}
+      WORLD_TICK_MS: ${WORLD_TICK_MS:-5000}
+    ports:
+      - "3000:3000"
+    mem_limit: 384m
+    healthcheck:
+      test:
+        - CMD
+        - node
+        - -e
+        - "fetch('http://127.0.0.1:3000/health').then(r=>process.exit(r.ok?0:1)).catch(()=>process.exit(1))"
+      interval: 15s
+      timeout: 5s
+      retries: 5
+      start_period: 30s
+
+volumes:
+  db_data:
